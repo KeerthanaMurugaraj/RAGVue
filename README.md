@@ -1,9 +1,8 @@
 
-RAGVue:A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation
+RAGVue: A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation
 ---
 
-RAGVue is a lightweight and explainable evaluation framework for Retrieval-Augmented Generation (RAG) systems.  
-It provides fine-grained, interpretable diagnostics across retrieval, answer quality, and factual grounding, going beyond simple numerical metrics.
+RAGVue is a lightweight and explainable evaluation framework for Retrieval-Augmented Generation (RAG) systems. It provides fine-grained, interpretable diagnostics across retrieval, answer quality, and factual grounding, going beyond simple numerical metrics.
 
 RAGVue supports:
 
