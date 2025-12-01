@@ -23,8 +23,8 @@ RAGVue includes **seven core metrics** across retrieval, answer quality, and gro
 
 ```
 git clone <-repo-url> 
-cd ragvue
-pip install -e .
+cd RAGVue
+pip install .
 ```
 ## 🧠 Usage
 
