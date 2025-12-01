@@ -1,0 +1,40 @@
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ragvue"
+version = "0.1.0"
+description = "A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation"
+developer = [{name = "Keerthana Murugaraj"}]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "python-dotenv>=1.0",
+    "pydantic>=2.7",
+    "tqdm>=4.66",
+    "typer>=0.12",
+    "rich>=13.7",
+    "openai>=1.0",
+    "streamlit>=1.37",
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+
+[project.scripts]
+ragvue-cli = "ragvue.cli:cli"
+ragvue-py = "ragvue.python_cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ragvue*"]
+exclude = ["tests*", "examples*", "smoke_tests*"]
