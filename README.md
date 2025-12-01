@@ -90,7 +90,7 @@ streamlit run streamlit_app.py
 ```
 
 #### Features
-- Upload JSONL files  
+- Upload JSONL files  (Test with our example data available in example_data/..)
 - Manual & Agentic metric selection  
 - API key input  
 - Global summary dashboard  
@@ -106,6 +106,9 @@ RAGVue expects JSONL like:
 ```json
 {"question": "...", "answer": "...", "context": ["chunk1", "chunk2"]}
 ```
+
+
+
 ###  Metrics Overview
 | **Category**             | **Metric**            | **Inputs**  |  **Description**                                                     |
 |--------------------------|-----------------------|-------------| ---------------------------------------------------------------------- |
