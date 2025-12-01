@@ -124,8 +124,7 @@ Because the framework is still an early prototype, the license is intentionally 
 This license allows:  
 ✔ research & academic use  
 ❌ no commercial use  
-❌ no modification or derivative works  
-❌ no redistribution of modified versions  
+
 For full license text, see: 
 https://creativecommons.org/licenses/by-nc/4.0/
 
