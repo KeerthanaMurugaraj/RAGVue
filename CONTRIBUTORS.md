@@ -1,6 +1,6 @@
-#### How to Become a Contributor
-We welcome contributions from the community to help improve RAGVue!
-Before contributing, please read the following guidelines to ensure a smooth process.
+## How to Become a Contributor
+We welcome community contributions to improve RAGVue!
+Before contributing, please read the following guidelines to make sure it's a smooth process.
 
 To contribute:
 1. Fork the repository.
@@ -18,9 +18,10 @@ Special thanks to the testers and early users who are helping refine the framewo
 If you have any questions about the contribution process, please reach out to the maintainer.
 
 ## ⭐ Support RAGVue
+
 Your support helps keep RAGVue thriving!
 
-If you find RAGVue useful, consider starring the repository on GitHub and sharing it with others.
+If you find RAGVue useful, consider citing the paper, starring the repository on GitHub, and sharing it with others.
 
 Thank you for being part of the RAGVue community!
 
