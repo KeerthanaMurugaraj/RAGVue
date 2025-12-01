@@ -17,6 +17,12 @@ RAGVue supports:
 
 RAGVue includes **seven core metrics** across retrieval, answer quality, and grounding.
 
+
+
+> **Note**
+> - Currently, the calibration metric is available only in **manual mode**, which is better suited for individual inspection.  
+> - Agentic mode supports the other six metrics, but not calibration at this time.
+
 ## 🚀 Installation
 
 ### Install from source
@@ -114,8 +120,6 @@ RAGVue expects JSONL like:
 {"question": "...", "answer": "...", "context": ["chunk1", "chunk2"]}
 ```
 
-
-
 ###  Metrics Overview
 | **Category**             | **Metric**            | **Inputs**  |  **Description**                                                     |
 |--------------------------|-----------------------|-------------| ---------------------------------------------------------------------- |
@@ -126,6 +130,7 @@ RAGVue expects JSONL like:
 |                          | *Clarity*             | A           | Evaluates the linguistic quality of the answer, including grammar, fluency, logical flow, coherence, and overall readability.               |
 |**Grounding & Stability** | *Strict Faithfulness* | A, C        | Evaluates how many factual claims in the answer are directly supported by the retrieved context, enforcing strict evidence alignment (entity accuracy and temporal correctness)|
 |                          | *Calibration*         | Q, A, C     | Examines the stability of metric by measuring variance across different judge configurations (model choice and temperature).         |
+
 
 ### 🔐 Licensing 
 
