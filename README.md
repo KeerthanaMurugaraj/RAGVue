@@ -119,7 +119,7 @@ RAGVue expects JSONL like:
 
 ### 🔐 Licensing 
 
-This project is currently licensed under **CC BY-NC-ND 4.0**.
+This project is currently licensed under **CC BY-NC 4.0**.
 Because the framework is still an early prototype, the license is intentionally restrictive.  A more open license will be introduced once the system matures.
 This license allows:  
 ✔ research & academic use  
@@ -127,7 +127,7 @@ This license allows:
 ❌ no modification or derivative works  
 ❌ no redistribution of modified versions  
 For full license text, see: 
-https://creativecommons.org/licenses/by-nc-nd/4.0/
+https://creativecommons.org/licenses/by-nc/4.0/
 
 ###  📩 Contact
 For questions or licensing inquiries, please contact: [ragvue.license@gmail.com](mailto:ragvue.license@gmail.com)
