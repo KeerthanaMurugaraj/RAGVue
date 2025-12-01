@@ -25,6 +25,7 @@ RAGVue includes **seven core metrics** across retrieval, answer quality, and gro
 git clone <-repo-url> 
 cd RAGVue
 pip install .
+
 ```
 ## 🧠 Usage
 
@@ -33,6 +34,12 @@ RAGVue can be used via:
 - **A. Python API**  
 - **B. CLI tools (`ragvue-cli` & `ragvue-py`)**  
 - **C. Streamlit UI (no-code)**  
+
+> **Note**
+> - If you are using the **Python API** or **CLI**, please set your API key in the `.env` file.
+> - If you are using the **Streamlit no-code interface**, you can either set your API key in the `.env` file or enter it directly in the interface.
+
+
 
 ### A. Python API
 
