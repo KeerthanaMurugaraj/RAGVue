@@ -135,4 +135,7 @@ For questions or licensing inquiries, please contact: [ragvue.license@gmail.com]
 
 (To be added)
 
+### 🙌 Contributors
+(Any contributors are welcomed! Please see  [CONTRIBUTORS.md](CONTRIBUTORS.md))
+
 
