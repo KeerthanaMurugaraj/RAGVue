@@ -626,8 +626,6 @@ with c1:
     It supports two modes:
     <span class="chip">Manual</span> where you select metrics, and
     <span class="chip">Agentic</span> where an orchestrator auto-selects relevant metrics and synthesizes overall scores.
-  </p>
-  <p class="muted">Designed for fast demos and reproducible experiments for the EACL Demo Track.</p>
 </div>
         """,
         unsafe_allow_html=True,
