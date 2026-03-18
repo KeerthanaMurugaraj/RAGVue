@@ -50,6 +50,13 @@ git clone <-repo-url> ragvue
 cd ragvue
 pip install -e .
 ```
+### Set up API keys
+
+RAGVue uses LLMs for evaluation, so you need to set up API keys for the providers you want to use. Currently, we support OpenAI and we plan to add more providers in the future.
+You have to create **.env** file in the root directory of the project and add your API keys in the following format:
+```
+OPENAI_API_KEY = <your-key-here>
+```
 ## 🧠 Usage
 
 RAGVue can be used via:
