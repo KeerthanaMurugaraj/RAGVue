@@ -125,12 +125,16 @@ streamlit run streamlit_app.py
 ```
 
 #### Features
-- Upload JSONL files  
-- Manual & Agentic metric selection  
-- API key input  
-- Global summary dashboard  
-- Individual case-level diagnostic views  
-- Multi-format export (JSON, Markdown, CSV, HTML)  
+- Upload JSONL files
+- Manual & Agentic metric selection
+- API key input
+- Global summary dashboard
+- Individual case-level diagnostic views
+- Multi-format export (JSON, Markdown, CSV, HTML)
+- **Live progress bar** — per-item progress during evaluation
+- **Custom report labels** — name a report before running for easy identification
+- **Report history** — last 10 reports saved automatically; view, filter, and delete from the Reports tab
+- **Report comparison** — select two saved reports side-by-side and inspect per-metric deltas (B − A)
 
 ---
 ### D. FastAPI REST API

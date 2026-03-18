@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, io, json, csv, statistics , time
+import os, io, json, csv, statistics, time, datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -50,6 +50,27 @@ from ragvue import load_metrics
 from ragvue import ReportBuilder
 from ragvue import evaluate as pkg_evaluate
 from ragvue import AgenticOrchestrator
+
+# ── Report history ────────────────────────────────────────────────────────────
+REPORTS_PATH = Path("saved_reports.json")
+MAX_HISTORY = 10
+
+def _save_to_history(report: dict, label: str) -> None:
+    """Prepend report to saved_reports.json, keeping the last MAX_HISTORY entries."""
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = {"timestamp": ts, "label": label, "report": report}
+    history: list = []
+    if REPORTS_PATH.exists():
+        try:
+            with open(REPORTS_PATH, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except Exception:
+            history = []
+    history.insert(0, entry)
+    history = history[:MAX_HISTORY]
+    with open(REPORTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+
 # ──────────────────────────────────────────────────────────────────────────────
 DARK = {
     "--bg": "#0b0f19",
@@ -655,13 +676,14 @@ def read_jsonl_bytes(file_bytes: bytes) -> List[Dict[str, Any]]:
             rows.append(json.loads(ln))
     return rows
 
-def build_download(data: str | bytes, filename: str, mime: str):
+def build_download(data: str | bytes, filename: str, mime: str, key: str | None = None):
     return st.download_button(
         label=f"⬇ Download {filename}",
         data=data if isinstance(data, (bytes, bytearray)) else data.encode("utf-8"),
         file_name=filename,
         mime=mime,
         use_container_width=True,
+        key=key,
     )
 
 def _overall_from_report(report: Dict[str, Any]) -> Optional[float]:
@@ -830,7 +852,7 @@ def _render_metric_diagnostics(name: str, m: Dict[str, Any]):
                     st.markdown(f"- {c}")
 
 
-def render_report(report: Dict[str, Any], *, agentic_mode: bool, min_item_score: float):
+def render_report(report: Dict[str, Any], *, agentic_mode: bool, min_item_score: float, key_prefix: str = "report"):
     rb = ReportBuilder(report)
 
     # ===== Sticky Summary =====
@@ -1077,21 +1099,21 @@ def render_report(report: Dict[str, Any], *, agentic_mode: bool, min_item_score:
     # ========= Download buttons =========
     cols = st.columns(5)
     with cols[0]:
-        build_download(js, "report.json", "application/json")
+        build_download(js, "report.json", "application/json", key=f"{key_prefix}_dl_json")
     with cols[1]:
-        build_download(md, "report.md", "text/markdown")
+        build_download(md, "report.md", "text/markdown", key=f"{key_prefix}_dl_md")
     with cols[2]:
         if rows_metrics:
-            build_download(csv_metrics_buf.getvalue(), "report_metrics.csv", "text/csv")
+            build_download(csv_metrics_buf.getvalue(), "report_metrics.csv", "text/csv", key=f"{key_prefix}_dl_csv_metrics")
         else:
-            st.button("report_metrics.csv(no rows)", disabled=True, use_container_width=True)
+            st.button("report_metrics.csv(no rows)", disabled=True, use_container_width=True, key=f"{key_prefix}_dl_csv_metrics_empty")
     with cols[3]:
         if rows_items:
-            build_download(csv_items_buf.getvalue(), "report_items_flat.csv", "text/csv")
+            build_download(csv_items_buf.getvalue(), "report_items_flat.csv", "text/csv", key=f"{key_prefix}_dl_csv_items")
         else:
-            st.button("report_items_flat.csv (no rows)", disabled=True, use_container_width=True)
+            st.button("report_items_flat.csv (no rows)", disabled=True, use_container_width=True, key=f"{key_prefix}_dl_csv_items_empty")
     with cols[4]:
-        build_download(html, "report.html", "text/html")
+        build_download(html, "report.html", "text/html", key=f"{key_prefix}_dl_html")
 
 
 # ============================== PAGE CONFIG ==================================
@@ -1195,24 +1217,12 @@ with st.sidebar:
     st.subheader("🔎 Filters")
     min_item_score = st.slider("Min item score to display", 0.0, 1.0, 0.0, 0.01)
 
+    report_name = st.text_input("Report label (optional)", placeholder="e.g. v2-pipeline", key="report_name_input")
+
     run_btn = st.button("▶ Run Evaluation", use_container_width=True)
 
     st.markdown("---")
-    if Path("saved_report.json").exists():
-        st.success("Saved report found on disk.")
-        if st.button("📂 Load saved report"):
-            try:
-                with open("saved_report.json", "r", encoding="utf-8") as f:
-                    st.session_state["last_report"] = json.load(f)
-                st.info("Loaded saved report.")
-            except Exception as e:
-                st.error(f"Could not load: {e}")
-
-    if "last_report" in st.session_state:
-        if st.button("💾 Save current report"):
-            with open("saved_report.json", "w", encoding="utf-8") as f:
-                json.dump(st.session_state["last_report"], f, ensure_ascii=False, indent=2)
-            st.success("Report saved.")
+    st.caption("📋 Reports are saved automatically. View history in the **Reports** tab.")
 
 
 # ============================== HEADER / OVERVIEW ============================
@@ -1296,7 +1306,7 @@ with fc1:
 - **Manual & Agentic modes**: Pick metrics yourself or let the orchestrator decide.
 - **Per-item drill-down**: Questions, answers, contexts, aggregate score, and metric-wise explanations.
 - **Instant exports**: Download **JSON**, **CSV**, **Markdown**, or **HTML** reports for papers & repos.
-- **Session resilience**: Auto-save and re-load the last report (`saved_report.json`).
+- **Session resilience**: Auto-saves the last 10 reports — view and reload any of them in the **Reports** tab.
         """
     )
 
@@ -1314,7 +1324,7 @@ with fc2:
 st.markdown("---")
 
 # Tabs
-tab_overview, tab_eval = st.tabs(["**Overview**", "**Evaluate**"])
+tab_overview, tab_eval, tab_reports = st.tabs(["**Overview**", "**Evaluate**", "**Reports**"])
 
 # ============================== OVERVIEW TAB ================================
 with tab_overview:
@@ -1348,6 +1358,8 @@ with tab_eval:
     # Run / Render logic
     if run_btn:
         status_box = st.empty()
+        progress_bar = st.empty()
+        progress_text = st.empty()
         start_time = time.perf_counter()
         status_box.info("Starting evaluation... this may take a while depending on your dataset and API speed.")
         # 🔐 Make sure we actually have a key before doing anything
@@ -1368,7 +1380,7 @@ with tab_eval:
             if not items:
                 st.error("No items available. Upload a `.jsonl` first from the sidebar.")
             else:
-                st.info(f"Running evaluation on {len(items)} item(s).")
+                status_box.info(f"Running evaluation on {len(items)} item(s)...")
 
                 if mode.startswith("Manual"):
                     if not selected_metrics:
@@ -1377,6 +1389,8 @@ with tab_eval:
                         results = []
 
                         for i, item in enumerate(items, start=1):
+                            progress_bar.progress(i / len(items))
+                            progress_text.text(f"Evaluating item {i} of {len(items)}...")
                             t0 = time.perf_counter()
                             # run evaluation for this single item
                             single_report = pkg_evaluate([item], metrics=list(selected_metrics))
@@ -1397,14 +1411,19 @@ with tab_eval:
                         }
 
                         st.session_state["last_report"] = report
-                        with open("saved_report.json", "w", encoding="utf-8") as f:
-                            json.dump(report, f, ensure_ascii=False, indent=2)
-
-                        render_report(report, agentic_mode=False, min_item_score=min_item_score)
+                        _label = report_name.strip() if report_name.strip() else (upl.name if upl else "unknown")
+                        _save_to_history(report, f"Manual · {_label} · {len(items)} items")
+                        progress_bar.empty()
+                        progress_text.empty()
+                        elapsed = time.perf_counter() - start_time
+                        status_box.success(f"✅ Evaluation completed in {elapsed:.1f} seconds.")
+                        render_report(report, agentic_mode=False, min_item_score=min_item_score, key_prefix="eval")
                 else:
                     orch = AgenticOrchestrator()
                     results = []
-                    for item in items:
+                    for i, item in enumerate(items, start=1):
+                        progress_bar.progress(i / len(items))
+                        progress_text.text(f"Evaluating item {i} of {len(items)}...")
                         t0 = time.perf_counter()
                         single_report = orch.run([item])
                         elapsed = time.perf_counter() - t0
@@ -1417,9 +1436,11 @@ with tab_eval:
 
                     report = {"results": results, "summary": summary}
                     st.session_state["last_report"] = report
-                    with open("saved_report.json", "w", encoding="utf-8") as f:
-                        json.dump(report, f, ensure_ascii=False, indent=2)
-                    render_report(report, agentic_mode=True, min_item_score=min_item_score)
+                    _label = report_name.strip() if report_name.strip() else (upl.name if upl else "unknown")
+                    _save_to_history(report, f"Agentic · {_label} · {len(items)} items")
+                    progress_bar.empty()
+                    progress_text.empty()
+                    render_report(report, agentic_mode=True, min_item_score=min_item_score, key_prefix="eval")
 
                     # Final status
                     elapsed = time.perf_counter() - start_time
@@ -1430,19 +1451,118 @@ with tab_eval:
 
     elif "last_report" in st.session_state:
         st.info("Showing last report from session memory.")
-        render_report(st.session_state["last_report"], agentic_mode=(mode.startswith("Agentic")), min_item_score=min_item_score)
+        render_report(st.session_state["last_report"], agentic_mode=(mode.startswith("Agentic")), min_item_score=min_item_score, key_prefix="eval")
 
-    elif Path("saved_report.json").exists():
+    elif REPORTS_PATH.exists():
         try:
-            with open("saved_report.json", "r", encoding="utf-8") as f:
-                report = json.load(f)
-            st.session_state["last_report"] = report
-            st.info("Loaded previously saved report from disk.")
-            render_report(report, agentic_mode=(mode.startswith("Agentic")), min_item_score=min_item_score)
+            with open(REPORTS_PATH, "r", encoding="utf-8") as f:
+                history = json.load(f)
+            if history:
+                report = history[0]["report"]
+                st.session_state["last_report"] = report
+                st.info(f"Loaded most recent report: {history[0]['timestamp']} — {history[0]['label']}")
+                render_report(report, agentic_mode=(mode.startswith("Agentic")), min_item_score=min_item_score, key_prefix="eval")
         except Exception as e:
-            st.error(f"Could not load saved_report.json: {e}")
+            st.error(f"Could not load report history: {e}")
     else:
         st.info("Upload a `.jsonl` in the sidebar and click **Run Evaluation** to see the Summary here.")
+
+# ============================== REPORTS TAB ==================================
+with tab_reports:
+    st.subheader("📋 Report History")
+    if not REPORTS_PATH.exists():
+        st.info("No saved reports yet. Run an evaluation first.")
+    else:
+        try:
+            with open(REPORTS_PATH, "r", encoding="utf-8") as f:
+                history = json.load(f)
+            if not history:
+                st.info("No saved reports yet. Run an evaluation first.")
+            else:
+                labels = [f"{e['timestamp']}  —  {e['label']}" for e in history]
+
+                # ── Search / filter ──
+                search = st.text_input("🔍 Filter reports", placeholder="filter by mode, filename, or date...", key="history_search")
+                filtered_indices = [i for i, l in enumerate(labels) if not search or search.lower() in l.lower()]
+                filtered_labels = [labels[i] for i in filtered_indices]
+
+                if not filtered_labels:
+                    st.warning("No reports match your filter.")
+                else:
+                    compare_mode = st.checkbox("Compare two reports", key="compare_mode")
+
+                    if compare_mode:
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            choice_a = st.selectbox("Report A:", filtered_labels, key="cmp_a")
+                        with col_b:
+                            choice_b = st.selectbox("Report B:", filtered_labels, key="cmp_b")
+                        idx_a = filtered_indices[filtered_labels.index(choice_a)]
+                        idx_b = filtered_indices[filtered_labels.index(choice_b)]
+                        rep_a = history[idx_a]
+                        rep_b = history[idx_b]
+
+                        st.markdown("#### Metric Comparison")
+                        summary_a = rep_a["report"].get("summary", {})
+                        summary_b = rep_b["report"].get("summary", {})
+                        all_metrics = sorted(set(summary_a) | set(summary_b))
+                        if all_metrics:
+                            import pandas as pd
+                            rows = []
+                            for m in all_metrics:
+                                sa = summary_a.get(m)
+                                sb = summary_b.get(m)
+                                delta = round(sb - sa, 4) if sa is not None and sb is not None else None
+                                rows.append({
+                                    "Metric": m,
+                                    "Report A": round(sa, 4) if sa is not None else "—",
+                                    "Report B": round(sb, 4) if sb is not None else "—",
+                                    "Delta (B − A)": (f"+{delta}" if delta and delta > 0 else str(delta)) if delta is not None else "—",
+                                })
+                            st.dataframe(rows, use_container_width=True)
+                        else:
+                            st.info("No summary metrics available to compare.")
+
+                        st.markdown("---")
+                        st.markdown(f"**Report A** — {rep_a['timestamp']} · {rep_a['label']}")
+                        render_report(rep_a["report"], agentic_mode=("Agentic" in rep_a["label"]), min_item_score=0.0, key_prefix=f"cmp_a_{idx_a}")
+                        st.markdown("---")
+                        st.markdown(f"**Report B** — {rep_b['timestamp']} · {rep_b['label']}")
+                        render_report(rep_b["report"], agentic_mode=("Agentic" in rep_b["label"]), min_item_score=0.0, key_prefix=f"cmp_b_{idx_b}")
+
+                    else:
+                        col_sel, col_del, col_delall = st.columns([4, 1, 1])
+                        with col_sel:
+                            choice = st.selectbox(f"Select a report ({len(history)} saved, {len(filtered_labels)} shown):", filtered_labels, key="history_select")
+                        idx = filtered_indices[filtered_labels.index(choice)]
+                        selected = history[idx]
+
+                        with col_del:
+                            st.write("")  # vertical align
+                            if st.button("🗑 Delete this", key="del_one", use_container_width=True):
+                                history.pop(idx)
+                                with open(REPORTS_PATH, "w", encoding="utf-8") as f:
+                                    json.dump(history, f, ensure_ascii=False, indent=2)
+                                st.success("Report deleted.")
+                                st.rerun()
+
+                        with col_delall:
+                            st.write("")  # vertical align
+                            if st.button("🗑 Delete all", key="del_all", use_container_width=True):
+                                with open(REPORTS_PATH, "w", encoding="utf-8") as f:
+                                    json.dump([], f)
+                                st.success("All reports deleted.")
+                                st.rerun()
+
+                        st.caption(f"Mode: **{'Agentic' if 'Agentic' in selected['label'] else 'Manual'}** · Saved: {selected['timestamp']}")
+                        render_report(
+                            selected["report"],
+                            agentic_mode=("Agentic" in selected["label"]),
+                            min_item_score=0.0,
+                            key_prefix=f"reports_{idx}",
+                        )
+        except Exception as e:
+            st.error(f"Could not load report history: {e}")
 
 # ============================== FOOTER =======================================
 st.markdown("---")
