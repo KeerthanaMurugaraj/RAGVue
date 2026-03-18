@@ -115,6 +115,24 @@ ragvue-py   --input <your_data.jsonl>   --metrics <metrics>   --out-base report_
 ```
 ragvue-py   --input <your_data.jsonl>  --metrics <metrics> --agentic-out report_agentic   --skip-manual
 ```
+
+
+### C. Streamlit UI (No-Code Interface)
+
+Launch the UI:
+```
+streamlit run streamlit_app.py
+```
+
+#### Features
+- Upload JSONL files  
+- Manual & Agentic metric selection  
+- API key input  
+- Global summary dashboard  
+- Individual case-level diagnostic views  
+- Multi-format export (JSON, Markdown, CSV, HTML)  
+
+---
 ### D. FastAPI REST API
 
 Install with API dependencies:
@@ -193,24 +211,6 @@ curl -X POST http://localhost:8000/evaluate/agentic \
 The interactive API docs are available at `http://localhost:8000/docs` once the server is running.
 
 ---
-
-### C. Streamlit UI (No-Code Interface)
-
-Launch the UI:
-```
-streamlit run streamlit_app.py
-```
-
-#### Features
-- Upload JSONL files  
-- Manual & Agentic metric selection  
-- API key input  
-- Global summary dashboard  
-- Individual case-level diagnostic views  
-- Multi-format export (JSON, Markdown, CSV, HTML)  
-
----
-
 ### 📄 Input Format
 
 RAGVue expects JSONL like:
