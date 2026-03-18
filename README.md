@@ -14,6 +14,7 @@ It provides **interpretable diagnostics** across **retrieval**, **answer quality
   - Python CLI runner (`ragvue-py`)
   - CLI tool (`ragvue-cli`)
   - Streamlit Web UI
+  - FastAPI REST API
 
 
 <table border="0" cellspacing="0" cellpadding="8" style="border:none;border-collapse:collapse;">
@@ -61,9 +62,10 @@ OPENAI_API_KEY = <your-key-here>
 
 RAGVue can be used via:
 
-- **A. Python API**  
-- **B. CLI tools (`ragvue-cli` & `ragvue-py`)**  
-- **C. Streamlit UI (no-code)**  
+- **A. Python API**
+- **B. CLI tools (`ragvue-cli` & `ragvue-py`)**
+- **C. Streamlit UI (no-code)**
+- **D. FastAPI REST API**
 
 ### A. Python API
 
@@ -113,6 +115,85 @@ ragvue-py   --input <your_data.jsonl>   --metrics <metrics>   --out-base report_
 ```
 ragvue-py   --input <your_data.jsonl>  --metrics <metrics> --agentic-out report_agentic   --skip-manual
 ```
+### D. FastAPI REST API
+
+Install with API dependencies:
+```bash
+pip install -e ".[all]"
+```
+
+Start the server:
+```bash
+ragvue-api                        # default: 0.0.0.0:8000
+ragvue-api --port 9000            # custom port
+ragvue-api --host 127.0.0.1       # custom host
+ragvue-api --reload               # auto-reload for development
+```
+
+#### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Server health check + loaded metric count |
+| `GET` | `/metrics` | List all available metric names |
+| `POST` | `/evaluate` | Evaluate a single item with chosen metrics |
+| `POST` | `/evaluate/batch` | Evaluate multiple items (returns per-metric mean) |
+| `POST` | `/evaluate/agentic` | Agentic evaluation — auto-selects metrics per item |
+
+#### Example requests
+
+**Health check:**
+```bash
+curl http://localhost:8000/health
+```
+
+**List metrics:**
+```bash
+curl http://localhost:8000/metrics
+```
+
+**Evaluate a single item:**
+```bash
+curl -X POST http://localhost:8000/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "item": {
+      "question": "What is the capital of France?",
+      "answer": "The capital of France is Paris.",
+      "contexts": ["Paris is the capital and largest city of France."]
+    },
+    "metrics": ["answer_relevance", "strict_faithfulness"]
+  }'
+```
+
+**Batch evaluation:**
+```bash
+curl -X POST http://localhost:8000/evaluate/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {"question": "...", "answer": "...", "contexts": ["..."]},
+      {"question": "...", "answer": "...", "contexts": ["..."]}
+    ],
+    "metrics": ["answer_relevance", "clarity"]
+  }'
+```
+
+**Agentic evaluation (auto-selects metrics):**
+```bash
+curl -X POST http://localhost:8000/evaluate/agentic \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {"question": "...", "answer": "...", "contexts": ["..."]}
+    ]
+  }'
+```
+
+The interactive API docs are available at `http://localhost:8000/docs` once the server is running.
+
+---
+
 ### C. Streamlit UI (No-Code Interface)
 
 Launch the UI:
@@ -135,7 +216,7 @@ streamlit run streamlit_app.py
 RAGVue expects JSONL like:
 
 ```json
-{"question": "...", "answer": "...", "context": ["chunk1", "chunk2"]}
+{"question": "...", "answer": "...", "contexts": ["chunk1", "chunk2"]}
 ```
 ### Metrics Overview
 
