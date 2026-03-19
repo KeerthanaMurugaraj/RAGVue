@@ -18,6 +18,7 @@ _DENYLIST = {
     "env",
     "aspects",
     "smoke",
+    "metric_template",
 }
 
 

@@ -71,6 +71,32 @@ def _save_to_history(report: dict, label: str) -> None:
     with open(REPORTS_PATH, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
+# ── Longitudinal run registry ─────────────────────────────────────────────────
+RUN_REGISTRY_PATH = Path("run_registry.json")
+
+def _append_to_registry(summary: dict, label: str, version: str = "", notes: str = "") -> None:
+    """Append a lightweight run entry (summary only) to the registry — no cap."""
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    entry = {
+        "run_id": run_id,
+        "timestamp": ts,
+        "label": label,
+        "version": version,
+        "notes": notes,
+        "summary": {k: round(float(v), 4) for k, v in summary.items() if isinstance(v, (int, float))},
+    }
+    registry: list = []
+    if RUN_REGISTRY_PATH.exists():
+        try:
+            with open(RUN_REGISTRY_PATH, "r", encoding="utf-8") as f:
+                registry = json.load(f)
+        except Exception:
+            registry = []
+    registry.append(entry)
+    with open(RUN_REGISTRY_PATH, "w", encoding="utf-8") as f:
+        json.dump(registry, f, ensure_ascii=False, indent=2)
+
 # ──────────────────────────────────────────────────────────────────────────────
 DARK = {
     "--bg": "#0b0f19",
@@ -1205,19 +1231,29 @@ with st.sidebar:
     max_items = st.number_input("Limit items (0 = all)", min_value=0, value=0, step=1)
 
     st.subheader("⚙️ Evaluation Mode")
-    mode = st.radio("Choose how to evaluate:", ["Manual (select metrics)", "Agentic (auto-select)"], index=1, help="Manual = you pick metrics. Agentic = orchestrator chooses metrics and aggregates scores.")
+    mode = st.radio(
+        "Choose how to evaluate:",
+        ["Manual (select metrics)", "Agentic (auto-select)", "Retrieval Only"],
+        index=1,
+        help="Manual = you pick metrics. Agentic = orchestrator chooses metrics and aggregates scores. Retrieval Only = runs retrieval_relevance + retrieval_coverage (no answer needed).",
+    )
 
     selected_metrics: List[str] = []
     if mode.startswith("Manual"):
         st.caption("Select metrics to run:")
         discovered = sorted(load_metrics().keys())
         selected_metrics = st.multiselect("Metrics", discovered, default=discovered)
+    elif mode == "Retrieval Only":
+        selected_metrics = ["retrieval_relevance", "retrieval_coverage"]
+        st.caption("Runs: `retrieval_relevance`, `retrieval_coverage` — no answer field required.")
 
     st.markdown("---")
     st.subheader("🔎 Filters")
     min_item_score = st.slider("Min item score to display", 0.0, 1.0, 0.0, 0.01)
 
     report_name = st.text_input("Report label (optional)", placeholder="e.g. v2-pipeline", key="report_name_input")
+    pipeline_version = st.text_input("Pipeline version (optional)", placeholder="e.g. v1.2", key="pipeline_version_input")
+    run_notes = st.text_input("Run notes (optional)", placeholder="e.g. changed chunking strategy", key="run_notes_input")
 
     run_btn = st.button("▶ Run Evaluation", use_container_width=True)
 
@@ -1324,7 +1360,7 @@ with fc2:
 st.markdown("---")
 
 # Tabs
-tab_overview, tab_eval, tab_reports = st.tabs(["**Overview**", "**Evaluate**", "**Reports**"])
+tab_overview, tab_eval, tab_reports, tab_longitudinal = st.tabs(["**Overview**", "**Evaluate**", "**Reports**", "**Longitudinal**"])
 
 # ============================== OVERVIEW TAB ================================
 with tab_overview:
@@ -1382,7 +1418,7 @@ with tab_eval:
             else:
                 status_box.info(f"Running evaluation on {len(items)} item(s)...")
 
-                if mode.startswith("Manual"):
+                if mode.startswith("Manual") or mode == "Retrieval Only":
                     if not selected_metrics:
                         st.warning("No metrics selected; nothing to run.")
                     else:
@@ -1392,27 +1428,23 @@ with tab_eval:
                             progress_bar.progress(i / len(items))
                             progress_text.text(f"Evaluating item {i} of {len(items)}...")
                             t0 = time.perf_counter()
-                            # run evaluation for this single item
                             single_report = pkg_evaluate([item], metrics=list(selected_metrics))
                             elapsed = time.perf_counter() - t0
 
                             if single_report.get("results"):
                                 res = single_report["results"][0]
-                                # attach per-item time
-                                res["eval_time_sec"] = round(elapsed,2)
+                                res["eval_time_sec"] = round(elapsed, 2)
                                 results.append(res)
                         summary = compute_summary_from_results(results)
-                        # rebuild a combined report from all single-item results
                         rb = ReportBuilder({"results": results})
-                        report = {
-                            "results": results,
-
-                            "summary": summary,  # per-metric means
-                        }
+                        report = {"results": results, "summary": summary}
 
                         st.session_state["last_report"] = report
                         _label = report_name.strip() if report_name.strip() else (upl.name if upl else "unknown")
-                        _save_to_history(report, f"Manual · {_label} · {len(items)} items")
+                        _mode_tag = "Retrieval" if mode == "Retrieval Only" else "Manual"
+                        _full_label = f"{_mode_tag} · {_label} · {len(items)} items"
+                        _save_to_history(report, _full_label)
+                        _append_to_registry(summary, _full_label, version=pipeline_version.strip(), notes=run_notes.strip())
                         progress_bar.empty()
                         progress_text.empty()
                         elapsed = time.perf_counter() - start_time
@@ -1437,7 +1469,9 @@ with tab_eval:
                     report = {"results": results, "summary": summary}
                     st.session_state["last_report"] = report
                     _label = report_name.strip() if report_name.strip() else (upl.name if upl else "unknown")
-                    _save_to_history(report, f"Agentic · {_label} · {len(items)} items")
+                    _full_label = f"Agentic · {_label} · {len(items)} items"
+                    _save_to_history(report, _full_label)
+                    _append_to_registry(summary, _full_label, version=pipeline_version.strip(), notes=run_notes.strip())
                     progress_bar.empty()
                     progress_text.empty()
                     render_report(report, agentic_mode=True, min_item_score=min_item_score, key_prefix="eval")
@@ -1563,6 +1597,85 @@ with tab_reports:
                         )
         except Exception as e:
             st.error(f"Could not load report history: {e}")
+
+# ============================== LONGITUDINAL TAB =============================
+with tab_longitudinal:
+    st.subheader("📈 Longitudinal Tracking")
+    if not RUN_REGISTRY_PATH.exists():
+        st.info("No runs recorded yet. Run an evaluation first.")
+    else:
+        try:
+            with open(RUN_REGISTRY_PATH, "r", encoding="utf-8") as f:
+                registry = json.load(f)
+            if not registry:
+                st.info("No runs recorded yet. Run an evaluation first.")
+            else:
+                import pandas as pd
+
+                # ── 1. Run registry table ─────────────────────────────────
+                st.markdown("### Run Registry")
+                reg_rows = [
+                    {
+                        "#": i + 1,
+                        "Timestamp": e["timestamp"],
+                        "Label": e["label"],
+                        "Version": e.get("version", ""),
+                        "Notes": e.get("notes", ""),
+                    }
+                    for i, e in enumerate(registry)
+                ]
+                st.dataframe(reg_rows, use_container_width=True)
+
+                # ── 2. Trend line chart ───────────────────────────────────
+                st.markdown("### Metric Trends")
+                all_metrics = sorted({k for e in registry for k in e.get("summary", {}).keys()})
+                if all_metrics:
+                    selected_trend = st.multiselect(
+                        "Select metrics to plot:",
+                        all_metrics,
+                        default=all_metrics[:5] if len(all_metrics) > 5 else all_metrics,
+                        key="trend_metrics",
+                    )
+                    if selected_trend:
+                        chart_rows = []
+                        for i, e in enumerate(registry):
+                            row = {"Run": f"#{i+1} {e['timestamp'][:10]}"}
+                            for m in selected_trend:
+                                row[m] = e.get("summary", {}).get(m)
+                            chart_rows.append(row)
+                        df_chart = pd.DataFrame(chart_rows).set_index("Run")
+                        st.line_chart(df_chart)
+                else:
+                    st.info("No summary metrics found in registry.")
+
+                # ── 3. Regression detection ───────────────────────────────
+                if len(registry) >= 2:
+                    st.markdown("### Regression Detection")
+                    st.caption("Comparing the two most recent runs.")
+                    threshold = st.slider(
+                        "Flag drops larger than:", 0.01, 0.20, 0.05, 0.01, key="reg_threshold"
+                    )
+                    latest = registry[-1].get("summary", {})
+                    previous = registry[-2].get("summary", {})
+                    overlap = sorted(set(latest) & set(previous))
+                    if overlap:
+                        rdet_rows = []
+                        for m in overlap:
+                            curr = latest[m]
+                            prev = previous[m]
+                            delta = round(curr - prev, 4)
+                            rdet_rows.append({
+                                "Metric": m,
+                                f"Previous ({registry[-2]['timestamp'][:10]})": prev,
+                                f"Current ({registry[-1]['timestamp'][:10]})": curr,
+                                "Delta": f"+{delta}" if delta > 0 else str(delta),
+                                "Status": "🔴 Regression" if delta < -threshold else ("🟡 Watch" if delta < 0 else "🟢 OK"),
+                            })
+                        st.dataframe(rdet_rows, use_container_width=True)
+                    else:
+                        st.info("No overlapping metrics between the last two runs.")
+        except Exception as e:
+            st.error(f"Could not load run registry: {e}")
 
 # ============================== FOOTER =======================================
 st.markdown("---")

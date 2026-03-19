@@ -34,23 +34,39 @@ def _ensure_openai_env():
                         break
 
 _ensure_openai_env()
-
 USER_TEMPLATE = (
     "Metric: negative rejection (unanswerable question handling).\n"
-    "Task: Determine whether the system correctly handles the answerability of the QUESTION given the CONTEXTS.\n\n"
-    "Step 1: Decide if the CONTEXTS contain sufficient information to answer the QUESTION.\n"
-    "  - 'sufficient' means the contexts contain direct or strongly implied evidence.\n"
-    "  - 'insufficient' means the contexts are missing, irrelevant, or do not address the question.\n\n"
-    "Step 2: Check the ANSWER's behavior:\n"
-    "  - If contexts are SUFFICIENT: the answer should provide a substantive response (not refuse).\n"
-    "  - If contexts are INSUFFICIENT: the answer should refuse, hedge, or say 'I don't know' — "
-    "NOT fabricate a confident answer.\n\n"
+    "Task: Determine whether the system correctly handles whether the QUESTION is answerable from the CONTEXTS.\n\n"
+
+    "Step 1: Decide whether the CONTEXTS are sufficient to answer the QUESTION AS ASKED.\n"
+    "  - 'context_sufficient = true' only if the contexts contain enough information to directly answer the actual question.\n"
+    "  - 'context_sufficient = false' if the contexts only discuss the topic generally, state that the exact answer is unknown, "
+    "    or indicate that the evidence is incomplete, disputed, missing, or insufficient.\n"
+    "  - IMPORTANT: Contexts that say the exact answer is unavailable or undocumented must be treated as INSUFFICIENT for answering the question.\n"
+    "  - IMPORTANT: Being able to say 'the answer is unknown' does NOT mean the contexts are sufficient to answer the original question itself.\n\n"
+
+    "Step 2: Check the ANSWER's behavior.\n"
+    "  - If context_sufficient = true: the answer should provide a substantive supported answer and should not refuse.\n"
+    "  - If context_sufficient = false: the answer should abstain, refuse, hedge appropriately, or explicitly state that the evidence is insufficient.\n"
+    "  - If context_sufficient = false and the answer provides unsupported specifics as if known, that is incorrect behavior.\n\n"
+
+    "Interpretation of answer_refuses:\n"
+    "  - answer_refuses = true if the answer abstains appropriately, says it cannot be determined, "
+    "    says the exact information is unknown, or clearly states that the evidence is insufficient.\n"
+    "  - answer_refuses = false if the answer gives a concrete answer, invented detail, or unsupported specificity.\n\n"
+
     "Scoring:\n"
-    "  - 1.0: Correct behavior (answers when it can, refuses when it should).\n"
-    "  - 0.0: Incorrect behavior (hallucinates from insufficient context, or refuses when context is sufficient).\n\n"
+    "  - 1.0 = correct behavior:\n"
+    "      * answers when context_sufficient = true\n"
+    "      * abstains/refuses when context_sufficient = false\n"
+    "  - 0.0 = incorrect behavior:\n"
+    "      * refuses when context_sufficient = true\n"
+    "      * gives unsupported specifics when context_sufficient = false\n\n"
+
     "QUESTION:\n{question}\n\n"
     "ANSWER:\n{answer}\n\n"
     "CONTEXTS:\n{context}\n\n"
+
     "Return compact JSON only, exactly:\n"
     "{{\n"
     '  "score": <float 0.0 or 1.0>,\n'

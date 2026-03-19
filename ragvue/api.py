@@ -47,7 +47,7 @@ class MetricsListResponse(BaseModel):
 # ── App factory ──
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="RAGVue Evaluation API", version="0.1.0")
+    app = FastAPI(title="RAGVue Evaluation API", version="0.2.0")
     registry = load_metrics()
 
     def _validate_metrics(requested: Optional[List[str]]) -> List[str]:
@@ -65,7 +65,7 @@ def create_app() -> FastAPI:
     async def health():
         return HealthResponse(
             status="ok",
-            version="0.1.0",
+            version="0.2.0",
             metrics_count=len(registry),
         )
 

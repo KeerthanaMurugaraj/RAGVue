@@ -133,8 +133,10 @@ streamlit run streamlit_app.py
 - Multi-format export (JSON, Markdown, CSV, HTML)
 - **Live progress bar** — per-item progress during evaluation
 - **Custom report labels** — name a report before running for easy identification
+- **Retrieval Only mode** — evaluate retrieval pipeline without requiring generated answers
 - **Report history** — last 10 reports saved automatically; view, filter, and delete from the Reports tab
 - **Report comparison** — select two saved reports side-by-side and inspect per-metric deltas (B − A)
+- **Longitudinal tracking** — persistent run registry with pipeline version and notes tags; metric trend chart across runs; automatic regression detection between the two most recent runs
 
 ---
 ### D. FastAPI REST API
