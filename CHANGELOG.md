@@ -2,6 +2,118 @@
 
 ---
 
+## [0.3.0 – 0.6.0] — March 2026 — Major Update
+
+> This entry consolidates four release increments into a single major update covering the Multi-LLM Judge Backend, the Your RAG Advisor feature, a full UI/Dashboard overhaul, and a suite of RAG Advisor enhancements.
+
+---
+
+### Part 1 — Multi-LLM Judge Backend (`ragvue/src/core/llm_judge.py`)
+
+All 12 OpenAI-based metrics now route through a provider-agnostic judge layer:
+
+- **OpenAI** (default): `gpt-4o-mini` via `response_format=json_object`
+- **Anthropic Claude** (optional): `claude-haiku-4-5-20251001` — cheap, fast, no JSON mode needed
+
+Switch provider via environment variable or Streamlit sidebar:
+```bash
+export RAGVUE_JUDGE_PROVIDER=anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Install with Anthropic dependency:
+```bash
+pip install -e ".[anthropic]"   # or pip install -e ".[all]"
+```
+
+The `llm_judge.py` module provides:
+- `call_judge(messages, model, temperature)` — JSON output (metric evaluation)
+- `call_judge_text(messages, model, temperature)` — text output (aspect extraction)
+- `call_judge_text_stream(messages, model, temperature)` — streaming generator for token-by-token output
+- `default_model()` — provider-appropriate default (`gpt-4o-mini` or `claude-haiku-4-5-20251001`)
+- `ensure_env()` — loads both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from `.env`
+
+#### Streamlit UI: Judge Provider Selector
+- **Judge Provider radio** in sidebar — toggle between OpenAI and Claude
+- **Anthropic API key input** shown when Claude is selected
+- Evaluation pre-check validates the correct key for the chosen provider
+
+#### Notes
+- Calibration metrics always use OpenAI (their job is cross-model agreement measurement)
+- Per-metric model overrides (`ANSWER_RELEVANCE_MODEL`, etc.) work with both providers — set to a Claude model ID to use Claude for a specific metric
+
+---
+
+### Part 2 — Your RAG Advisor (`streamlit_app.py`)
+
+A persistent conversational assistant embedded in the Streamlit dashboard for RAG architecture advice, with three sub-tabs: Chat, My Profile, and Analysis Tools.
+
+#### Chat
+- **Chatbox UI** — full conversation interface (`st.chat_message` + `st.chat_input`)
+- **Streaming responses** — token-by-token output via `st.write_stream`; no waiting for full reply; mid-stream errors caught and displayed inline
+- **Persistent memory** — conversation history saved to `rag_advisor_history.json`; survives page refreshes and restarts (last 20 turns)
+- **Report injection** — select any saved report from a dropdown and inject its full metric summary into the conversation with one click; no manual copy-paste
+- **Auto-inject banner** — a banner appears at the top of the Chat tab whenever a newer evaluation has been run; "Share with advisor" injects the metric summary in one click; "✕" dismisses without sharing; the banner only appears once per new run
+- **RAGVue-aware system prompt** — advisor knows all 22 metrics, their meaning, and common RAG failure patterns; gives architecture-specific advice rather than generic tips
+- **Token-efficient design** — users control what context is shared rather than auto-loading all results
+- **Export** — download full conversation as Markdown
+- **Quick starters** — pre-built prompt buttons shown on first open
+
+#### My Profile
+- **Multi-profile store** — save one profile per pipeline configuration; set any profile as active
+- **Fields:** retriever type, chunk size, chunk overlap, top-k, embedding model, generation LLM, framework, domain, and free-text notes
+- **Edit in place** — ✏️ Edit button pre-fills the form with existing values; Save updates the profile; Cancel exits without changes
+- **Auto-inject into system prompt** — the active profile is injected into every advisor conversation automatically, so the advisor always knows your current setup
+
+#### Analysis Tools
+- **Before / After Report Comparison** — select two saved reports; advisor explains what changed and hypothesises why based on your architecture
+- **Hypothesis Testing** — describe a planned change; advisor predicts which metrics will improve or degrade; validate with a new evaluation run
+- **Guided Diagnosis** — step-by-step walkthrough of Retrieval → Grounding → Generation, one focused question at a time; ends with a structured diagnosis summary
+- **Failure Mode Scanner** — select any saved report; advisor identifies active failure modes (retrieval miss, context ignorance, hallucination, over-confidence, multi-hop gap, generation drift); explains root causes; prioritises the top 2 issues; proposes one concrete, testable intervention per issue
+- **Suggest Next Experiment** — select any saved report; advisor recommends the single highest-ROI next experiment (specific change, expected metric impact, success threshold, potential trade-offs)
+
+#### Model Selection
+- Advisor model selector is independent of the global eval provider
+- Expanded from 2 to 6 options across both providers:
+
+| Model | Provider | Tier |
+|-------|----------|------|
+| `gpt-4o-mini` | OpenAI | fast (default) |
+| `gpt-4o` | OpenAI | capable |
+| `gpt-3.5-turbo` | OpenAI | budget |
+| `claude-haiku-4-5-20251001` | Anthropic | fast |
+| `claude-sonnet-4-6` | Anthropic | balanced |
+| `claude-opus-4-6` | Anthropic | powerful |
+
+- Provider (OpenAI vs Anthropic) is auto-detected from the model name — no separate provider toggle needed
+
+**Why it exists:** Evaluation results live in the dashboard — the advisor brings architecture expertise directly to those results without leaving the UI or manually exporting data.
+
+---
+
+### Part 3 — UI / Dashboard Overhaul (`streamlit_app.py`)
+
+#### Theming System
+- **Three themes** — Light (default), Dark (soft/dim), Beige; selectable from the ⚙️ Settings sidebar
+- **Light mode is now the default** — both session state and `config.toml` start in Light
+- **Soft dark mode** — replaced the near-black `#0b0f19` palette with a comfortable slate-blue dim palette (`#1e2433` base); much easier on the eyes at night
+- **Beige mode** — warm parchment palette for low-contrast reading environments
+- All three themes apply consistently across every UI element via CSS custom properties
+
+#### Button Fixes
+- **Always-white button text** — button text is hardcoded `#ffffff` across all themes; previously dark-theme buttons had black text (`#0b0f19`)
+- **Compact button size** — removed oversized padding that made buttons look like banners; children no longer inherit box-model styles (no more "box inside a button")
+- **Export / download buttons visible** — fixed conflicting CSS rules that made download button text invisible (white text on white background) in light mode
+
+#### Sidebar Collapse Arrow
+- Fixed garbled characters near the sidebar open/minimize arrow caused by `font-family !important` being applied to Streamlit's internal collapse-button glyphs; added explicit exclusion for `[data-testid="collapsedControl"]`
+
+#### Longitudinal Tab — Themed Components
+- **Run Registry table** — replaced `st.dataframe()` with a hand-built HTML `<table class="themed-table">` that fully respects all three themes (background, borders, hover, alternating rows via CSS variables)
+- **Metric Trends chart** — replaced `st.line_chart()` with a Plotly `go.Figure()` whose background, grid, tick, legend, and font colours are dynamically read from the active theme at render time
+- Added `plotly>=5.18` to core dependencies
+---
+
 ## [0.2.0] — March 2026
 
 ### New Features
@@ -65,7 +177,7 @@ pip install -e ".[all]"   # includes FastAPI + local metric deps
 
 ---
 
-## [0.1.0] — February 2026 — Performance & New Metrics Update
+## [0.1.0] — March 2026 — Performance & New Metrics Update
 
 ### New Metrics (6 reference-free metrics)
 

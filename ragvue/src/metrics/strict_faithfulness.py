@@ -2,40 +2,10 @@ from __future__ import annotations
 from typing import List, Dict, Any
 from ragvue.src.core.base import BaseJudge
 import os, json, re
-from pathlib import Path
 
-# ----------------- Load environment for OpenAI -----------------
-try:
-    from dotenv import load_dotenv, find_dotenv
-except Exception:
-    load_dotenv = find_dotenv = None
+from ragvue.src.core.llm_judge import call_judge, default_model, ensure_env
 
-
-def _ensure_openai_env():
-    if os.getenv("OPENAI_API_KEY"):
-        return
-    if load_dotenv:
-        load_dotenv(find_dotenv(filename=".env", usecwd=True), override=True)
-        if os.getenv("OPENAI_API_KEY"):
-            return
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
-        if os.getenv("OPENAI_API_KEY"):
-            return
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env.local", override=True)
-    if not os.getenv("OPENAI_API_KEY"):
-        for p in (
-            Path.cwd() / ".env",
-            Path(__file__).resolve().parents[2] / ".env",
-            Path.home() / ".env",
-        ):
-            if p.exists():
-                for line in p.read_text(encoding="utf-8").splitlines():
-                    if line.strip().startswith("OPENAI_API_KEY="):
-                        os.environ["OPENAI_API_KEY"] = line.split("=", 1)[1].strip().strip("'\"")
-                        break
-
-
-_ensure_openai_env()
+ensure_env()
 
 
 # ---------------------------- Judge ---------------------------------
@@ -234,26 +204,13 @@ class FaithfulnessJudge(BaseJudge):
 
     # ---- main evaluate ----
     def evaluate(self, s, client=None):
-        try:
-            from openai import OpenAI
-        except Exception as e:
-            return {"name": "strict_faithfulness", "score": 0.0, "error": f"OpenAI import error: {e}"}
-
-        if client is None:
-            client = OpenAI(
-                api_key=os.getenv("OPENAI_API_KEY"),
-                base_url=os.getenv("OPENAI_BASE_URL"),
-            )
-
         # ---- Single pass: claim extraction + strict judgement ----
         try:
-            resp = client.chat.completions.create(
-                model=os.getenv("FAITHFULNESS_MODEL", "gpt-4o-mini"),
-                messages=self.prompt(s),
+            text = call_judge(
+                self.prompt(s),
+                model=os.getenv("FAITHFULNESS_MODEL") or default_model(),
                 temperature=0.0,
-                response_format={"type": "json_object"},
             )
-            text = resp.choices[0].message.content or ""
         except Exception as e:
             return {"name": "strict_faithfulness", "score": 0.0, "error": f"LLM error: {e}"}
 
@@ -351,22 +308,13 @@ IS_METRIC = True
 
 def evaluate(item: Dict[str, Any]) -> Dict[str, Any]:
     from ragvue import JudgeInput
-    try:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL"),
-        )
-    except Exception:
-        client = None
-
     s = JudgeInput(
         question=item.get("question", ""),
         answer=item.get("answer", ""),
         contexts=list(item.get("contexts", []) or []),
         aspects=item.get("aspects"),
     )
-    res = FaithfulnessJudge().evaluate(s, client=client)
+    res = FaithfulnessJudge().evaluate(s)
 
     if isinstance(res, dict):
         res.setdefault("name", "strict_faithfulness")

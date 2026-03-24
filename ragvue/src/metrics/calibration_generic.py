@@ -10,13 +10,13 @@ TARGET_STRICT_FAITHFULNESS = {
     "model_env": "FAITHFULNESS_MODEL",
     "temp_env": "FAITHFULNESS_TEMPERATURE",
     "judges": [
-        {"name": "sf_gpt4omini_t00_run1", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "sf_gpt4omini_t00_run2", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "sf_gpt4omini_t20",      "model": "gpt-4o-mini",   "temperature": 0.2},
-        {"name": "sf_gpt4omini_t50",      "model": "gpt-4o-mini",   "temperature": 0.5},
-        {"name": "sf_gpt41mini_t00",      "model": "gpt-4.1-mini",  "temperature": 0.0},
-        {"name": "sf_gpt41mini_t30",      "model": "gpt-4.1-mini",  "temperature": 0.3},
-
+        {"name": "sf_gpt4omini_t00_run1", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "sf_gpt4omini_t00_run2", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "sf_gpt4omini_t20",      "model": "gpt-4o-mini",             "temperature": 0.2},
+        {"name": "sf_gpt4omini_t50",      "model": "gpt-4o-mini",             "temperature": 0.5},
+        {"name": "sf_gpt41mini_t00",      "model": "gpt-4.1-mini",            "temperature": 0.0},
+        {"name": "sf_gpt41mini_t30",      "model": "gpt-4.1-mini",            "temperature": 0.3},
+        {"name": "sf_claude_haiku_t00",   "model": "claude-haiku-4-5-20251001", "temperature": 0.0, "provider": "anthropic"},
     ],
 }
 
@@ -26,13 +26,13 @@ TARGET_ANSWER_COMPLETENESS = {
     "model_env": "ANSWER_COMPLETENESS_MODEL",
     "temp_env": "ANSWER_COMPLETENESS_TEMPERATURE",
     "judges": [
-        {"name": "ac_gpt4omini_t00_run1", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "ac_gpt4omini_t00_run2", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "ac_gpt4omini_t20",      "model": "gpt-4o-mini",   "temperature": 0.2},
-        {"name": "ac_gpt4omini_t50",      "model": "gpt-4o-mini",   "temperature": 0.5},
-        {"name": "ac_gpt41mini_t00",      "model": "gpt-4.1-mini",  "temperature": 0.0},
-        {"name": "ac_gpt41mini_t30",      "model": "gpt-4.1-mini",  "temperature": 0.3},
-
+        {"name": "ac_gpt4omini_t00_run1", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "ac_gpt4omini_t00_run2", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "ac_gpt4omini_t20",      "model": "gpt-4o-mini",             "temperature": 0.2},
+        {"name": "ac_gpt4omini_t50",      "model": "gpt-4o-mini",             "temperature": 0.5},
+        {"name": "ac_gpt41mini_t00",      "model": "gpt-4.1-mini",            "temperature": 0.0},
+        {"name": "ac_gpt41mini_t30",      "model": "gpt-4.1-mini",            "temperature": 0.3},
+        {"name": "ac_claude_haiku_t00",   "model": "claude-haiku-4-5-20251001", "temperature": 0.0, "provider": "anthropic"},
     ],
 }
 
@@ -42,13 +42,13 @@ TARGET_ANSWER_RELEVANCE = {
     "model_env": "ANSWER_RELEVANCE_MODEL",
     "temp_env": "ANSWER_RELEVANCE_TEMPERATURE",
     "judges": [
-        {"name": "ar_gpt4omini_t00_run1", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "ar_gpt4omini_t00_run2", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "ar_gpt4omini_t20",      "model": "gpt-4o-mini",   "temperature": 0.2},
-        {"name": "ar_gpt4omini_t50",      "model": "gpt-4o-mini",   "temperature": 0.5},
-        {"name": "ar_gpt41mini_t00",      "model": "gpt-4.1-mini",  "temperature": 0.0},
-        {"name": "ar_gpt41mini_t30",      "model": "gpt-4.1-mini",  "temperature": 0.3},
-
+        {"name": "ar_gpt4omini_t00_run1", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "ar_gpt4omini_t00_run2", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "ar_gpt4omini_t20",      "model": "gpt-4o-mini",             "temperature": 0.2},
+        {"name": "ar_gpt4omini_t50",      "model": "gpt-4o-mini",             "temperature": 0.5},
+        {"name": "ar_gpt41mini_t00",      "model": "gpt-4.1-mini",            "temperature": 0.0},
+        {"name": "ar_gpt41mini_t30",      "model": "gpt-4.1-mini",            "temperature": 0.3},
+        {"name": "ar_claude_haiku_t00",   "model": "claude-haiku-4-5-20251001", "temperature": 0.0, "provider": "anthropic"},
     ],
 }
 
@@ -58,13 +58,13 @@ TARGET_CLARITY = {
     "model_env": "CLARITY_MODEL",
     "temp_env": "CLARITY_TEMPERATURE",
     "judges": [
-        {"name": "cl_gpt4omini_t00_run1", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "cl_gpt4omini_t00_run2", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "cl_gpt4omini_t20",      "model": "gpt-4o-mini",   "temperature": 0.2},
-        {"name": "cl_gpt4omini_t50",      "model": "gpt-4o-mini",   "temperature": 0.5},
-        {"name": "cl_gpt41mini_t00",      "model": "gpt-4.1-mini",  "temperature": 0.0},
-        {"name": "cl_gpt41mini_t30",      "model": "gpt-4.1-mini",  "temperature": 0.3},
-
+        {"name": "cl_gpt4omini_t00_run1", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "cl_gpt4omini_t00_run2", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "cl_gpt4omini_t20",      "model": "gpt-4o-mini",             "temperature": 0.2},
+        {"name": "cl_gpt4omini_t50",      "model": "gpt-4o-mini",             "temperature": 0.5},
+        {"name": "cl_gpt41mini_t00",      "model": "gpt-4.1-mini",            "temperature": 0.0},
+        {"name": "cl_gpt41mini_t30",      "model": "gpt-4.1-mini",            "temperature": 0.3},
+        {"name": "cl_claude_haiku_t00",   "model": "claude-haiku-4-5-20251001", "temperature": 0.0, "provider": "anthropic"},
     ],
 }
 
@@ -74,13 +74,13 @@ TARGET_RETRIEVAL_COVERAGE = {
     "model_env": "RETRIEVAL_COVERAGE_MODEL",
     "temp_env": "RETRIEVAL_COVERAGE_TEMPERATURE",
     "judges": [
-        {"name": "rc_gpt4omini_t00_run1", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "rc_gpt4omini_t00_run2", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "rc_gpt4omini_t20",      "model": "gpt-4o-mini",   "temperature": 0.2},
-        {"name": "rc_gpt4omini_t50",      "model": "gpt-4o-mini",   "temperature": 0.5},
-        {"name": "rc_gpt41mini_t00",      "model": "gpt-4.1-mini",  "temperature": 0.0},
-        {"name": "rc_gpt41mini_t30",      "model": "gpt-4.1-mini",  "temperature": 0.3},
-
+        {"name": "rc_gpt4omini_t00_run1", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "rc_gpt4omini_t00_run2", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "rc_gpt4omini_t20",      "model": "gpt-4o-mini",             "temperature": 0.2},
+        {"name": "rc_gpt4omini_t50",      "model": "gpt-4o-mini",             "temperature": 0.5},
+        {"name": "rc_gpt41mini_t00",      "model": "gpt-4.1-mini",            "temperature": 0.0},
+        {"name": "rc_gpt41mini_t30",      "model": "gpt-4.1-mini",            "temperature": 0.3},
+        {"name": "rc_claude_haiku_t00",   "model": "claude-haiku-4-5-20251001", "temperature": 0.0, "provider": "anthropic"},
     ],
 }
 
@@ -90,13 +90,13 @@ TARGET_RETRIEVAL_RELEVANCE = {
     "model_env": "RETRIEVAL_RELEVANCE_MODEL",
     "temp_env": "RETRIEVAL_RELEVANCE_TEMPERATURE",
     "judges": [
-        {"name": "rr_gpt4omini_t00_run1", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "rr_gpt4omini_t00_run2", "model": "gpt-4o-mini",   "temperature": 0.0},
-        {"name": "rr_gpt4omini_t20",      "model": "gpt-4o-mini",   "temperature": 0.2},
-        {"name": "rr_gpt4omini_t50",      "model": "gpt-4o-mini",   "temperature": 0.5},
-        {"name": "rr_gpt41mini_t00",      "model": "gpt-4.1-mini",  "temperature": 0.0},
-        {"name": "rr_gpt41mini_t30",      "model": "gpt-4.1-mini",  "temperature": 0.3},
-
+        {"name": "rr_gpt4omini_t00_run1", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "rr_gpt4omini_t00_run2", "model": "gpt-4o-mini",             "temperature": 0.0},
+        {"name": "rr_gpt4omini_t20",      "model": "gpt-4o-mini",             "temperature": 0.2},
+        {"name": "rr_gpt4omini_t50",      "model": "gpt-4o-mini",             "temperature": 0.5},
+        {"name": "rr_gpt41mini_t00",      "model": "gpt-4.1-mini",            "temperature": 0.0},
+        {"name": "rr_gpt41mini_t30",      "model": "gpt-4.1-mini",            "temperature": 0.3},
+        {"name": "rr_claude_haiku_t00",   "model": "claude-haiku-4-5-20251001", "temperature": 0.0, "provider": "anthropic"},
     ],
 }
 
@@ -135,13 +135,17 @@ def _run_under_model(
     model_value: str,
     temp_env: str | None,
     temperature: float | None,
+    provider: str | None = None,
 ) -> Dict[str, Any]:
     prev_model = os.getenv(model_env)
     prev_temp = os.getenv(temp_env) if temp_env else None
+    prev_provider = os.getenv("RAGVUE_JUDGE_PROVIDER")
     try:
         os.environ[model_env] = model_value
         if temp_env is not None and temperature is not None:
             os.environ[temp_env] = str(temperature)
+        if provider is not None:
+            os.environ["RAGVUE_JUDGE_PROVIDER"] = provider
 
         out = metric_mod.evaluate(item)
 
@@ -157,6 +161,12 @@ def _run_under_model(
                 os.environ.pop(temp_env, None)
             else:
                 os.environ[temp_env] = prev_temp
+
+        if provider is not None:
+            if prev_provider is None:
+                os.environ.pop("RAGVUE_JUDGE_PROVIDER", None)
+            else:
+                os.environ["RAGVUE_JUDGE_PROVIDER"] = prev_provider
 
     # Normalize: always return dict
     if not isinstance(out, dict):
@@ -186,16 +196,18 @@ def evaluate_with_target(item: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str,
         j_name = jd["name"]
         j_model = jd["model"]
         j_temp = jd.get("temperature", None)
+        j_provider = jd.get("provider", None)  # None = keep current provider
         try:
-            out = _run_under_model(metric_mod, item, model_env, j_model, temp_env, j_temp)
+            out = _run_under_model(metric_mod, item, model_env, j_model, temp_env, j_temp, j_provider)
             score = _coerce_score(out.get("score", 0.0))
             sub_scores[j_name] = score
 
             # keep explanation + raw info for this judge
             judge_outputs[j_name] = {
                 "score": score,
+                "provider": j_provider or "openai",
+                "model": j_model,
                 "explanation": out.get("explanation", ""),
-                # everything else in case you want claims, etc.
                 "raw": {k: v for k, v in out.items() if k not in ("score", "explanation")},
             }
         except Exception as e:

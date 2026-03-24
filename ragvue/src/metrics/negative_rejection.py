@@ -3,37 +3,10 @@ from __future__ import annotations
 from typing import Dict, Any
 import json
 import os
-from pathlib import Path
 
-try:
-    from dotenv import load_dotenv, find_dotenv
-except Exception:
-    load_dotenv = find_dotenv = None
+from ragvue.src.core.llm_judge import call_judge, default_model, ensure_env
 
-def _ensure_openai_env():
-    if os.getenv("OPENAI_API_KEY"):
-        return
-    if load_dotenv:
-        load_dotenv(find_dotenv(filename=".env", usecwd=True), override=True)
-        if os.getenv("OPENAI_API_KEY"):
-            return
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
-        if os.getenv("OPENAI_API_KEY"):
-            return
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env.local", override=True)
-    if not os.getenv("OPENAI_API_KEY"):
-        for p in [
-            Path.cwd() / ".env",
-            Path(__file__).resolve().parents[2] / ".env",
-            Path.home() / ".env",
-        ]:
-            if p.exists():
-                for line in p.read_text(encoding="utf-8").splitlines():
-                    if line.strip().startswith("OPENAI_API_KEY="):
-                        os.environ["OPENAI_API_KEY"] = line.split("=", 1)[1].strip().strip("'\"")
-                        break
-
-_ensure_openai_env()
+ensure_env()
 USER_TEMPLATE = (
     "Metric: negative rejection (unanswerable question handling).\n"
     "Task: Determine whether the system correctly handles whether the QUESTION is answerable from the CONTEXTS.\n\n"
@@ -77,14 +50,6 @@ USER_TEMPLATE = (
 )
 
 
-def _make_openai():
-    from openai import OpenAI
-    kwargs = {"api_key": os.getenv("OPENAI_API_KEY")}
-    base = os.getenv("OPENAI_BASE_URL")
-    if base:
-        kwargs["base_url"] = base
-    return OpenAI(**kwargs)
-
 def _json_obj(text: str) -> Dict[str, Any]:
     try:
         o = json.loads(text)
@@ -114,7 +79,6 @@ def _coerce_score(x: Any) -> float:
 
 def evaluate(item: Dict[str, Any]) -> Dict[str, Any]:
     contexts = list(item.get("contexts", []) or [])
-    client = _make_openai()
     context_text = "\n".join(f"[{i+1}] {c}" for i, c in enumerate(contexts)) if contexts else "(no contexts provided)"
     user = USER_TEMPLATE.format(
         question=item.get("question", ""),
@@ -126,13 +90,7 @@ def evaluate(item: Dict[str, Any]) -> Dict[str, Any]:
         {"role": "user", "content": user},
     ]
     try:
-        out = client.chat.completions.create(
-            model=os.getenv("NEGATIVE_REJECTION_MODEL", "gpt-4o-mini"),
-            messages=msgs,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        text = out.choices[0].message.content or ""
+        text = call_judge(msgs, model=os.getenv("NEGATIVE_REJECTION_MODEL") or default_model(), temperature=0.0)
     except Exception as e:
         return {"name": "negative_rejection", "score": 0.0, "error": f"LLM error: {e}"}
 

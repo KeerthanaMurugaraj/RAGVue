@@ -46,6 +46,8 @@ class MetricsListResponse(BaseModel):
 
 # ── App factory ──
 
+MAX_BATCH_ITEMS = 200
+
 def create_app() -> FastAPI:
     app = FastAPI(title="RAGVue Evaluation API", version="0.2.0")
     registry = load_metrics()
@@ -95,6 +97,11 @@ def create_app() -> FastAPI:
 
     @app.post("/evaluate/batch", response_model=EvaluateResponse)
     async def evaluate_batch(req: BatchEvaluateRequest):
+        if len(req.items) > MAX_BATCH_ITEMS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Batch size {len(req.items)} exceeds limit of {MAX_BATCH_ITEMS}. Use checkpointing for large datasets.",
+            )
         metric_names = _validate_metrics(req.metrics)
         items = [it.model_dump() for it in req.items]
 
@@ -116,6 +123,11 @@ def create_app() -> FastAPI:
 
     @app.post("/evaluate/agentic", response_model=EvaluateResponse)
     async def evaluate_agentic(req: AgenticEvaluateRequest):
+        if len(req.items) > MAX_BATCH_ITEMS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Batch size {len(req.items)} exceeds limit of {MAX_BATCH_ITEMS}. Use checkpointing for large datasets.",
+            )
         items = [it.model_dump() for it in req.items]
         orch = AgenticOrchestrator()
 

@@ -9,12 +9,10 @@ It provides **interpretable diagnostics** across **retrieval**, **answer quality
 - 🔍 **Manual Mode** — choose the metrics you want
 - 🤖 **Agentic Mode** — automatically selects and runs the right diagnostics
 - 🖥️ **Streamlit UI** — no-code, interactive evaluation
-- 🔧 **Multiple Interfaces**
-  - Python API
-  - Python CLI runner (`ragvue-py`)
-  - CLI tool (`ragvue-cli`)
-  - Streamlit Web UI
-  - FastAPI REST API
+- 🔧 **Multiple Interfaces** — two layers, each with the right scope:
+  - *Evaluation engine*: Python API · CLI (`ragvue-cli`, `ragvue-py`) · FastAPI REST API
+  - *Interactive analysis*: Streamlit UI (history, comparison, longitudinal, diagnostics)
+- 🧠 **Multi-LLM Judge Backend** — OpenAI (default) or Anthropic Claude, switchable per run
 
 
 <table border="0" cellspacing="0" cellpadding="8" style="border:none;border-collapse:collapse;">
@@ -46,18 +44,59 @@ Optional: 4 Lightweight Local Metrics ( no API calls)
 
 ### Install from source
 
-```
+```bash
 git clone <-repo-url> ragvue
 cd ragvue
-pip install -e .
+pip install -e .                  # core (OpenAI judge)
+pip install -e ".[anthropic]"     # + Anthropic/Claude judge support
+pip install -e ".[all]"           # everything (FastAPI + local metrics + Anthropic)
 ```
 ### Set up API keys
 
-RAGVue uses LLMs for evaluation, so you need to set up API keys for the providers you want to use. Currently, we support OpenAI and we plan to add more providers in the future.
-You have to create **.env** file in the root directory of the project and add your API keys in the following format:
+RAGVue uses LLMs for evaluation. It supports **OpenAI** (default) and **Anthropic Claude** as judge backends.
+
+Create a **.env** file in the root directory and add the key(s) for the provider you want to use:
 ```
+# For OpenAI (default)
 OPENAI_API_KEY = <your-key-here>
+
+# For Claude/Anthropic (optional)
+ANTHROPIC_API_KEY = <your-key-here>
 ```
+
+To switch to Claude:
+```bash
+export RAGVUE_JUDGE_PROVIDER=anthropic   # or set in .env
+```
+Or select it in the Streamlit sidebar. Default provider is OpenAI (`gpt-4o-mini`); Claude uses `claude-haiku-4-5-20251001` by default.
+
+The RAG Advisor chat offers a separate model selector with six options across both providers:
+
+| Model | Provider | Tier |
+|-------|----------|------|
+| `gpt-4o-mini` | OpenAI | fast (default) |
+| `gpt-4o` | OpenAI | capable |
+| `gpt-3.5-turbo` | OpenAI | budget |
+| `claude-haiku-4-5-20251001` | Anthropic | fast |
+| `claude-sonnet-4-6` | Anthropic | balanced |
+| `claude-opus-4-6` | Anthropic | powerful |
+## 🏗️ Interface Design
+
+RAGVue has two distinct layers. Understanding the split helps you choose the right interface.
+
+| Layer | Interfaces | Purpose |
+|-------|-----------|---------|
+| **Evaluation Engine** | Python API, CLI (`ragvue-cli`, `ragvue-py`), FastAPI REST API | Headless computation — takes input items, runs metrics, returns scores. Fits into pipelines, CI/CD, notebooks, and custom tooling. |
+| **Interactive Analysis** | Streamlit UI | Visualization, report history, run comparison, longitudinal tracking, chatbot diagnostics. Designed for humans, not pipelines. |
+
+**Rule of thumb:**
+- Automating or integrating into a system → use the **API or CLI**
+- Exploring results, debugging, comparing runs → use the **Streamlit UI**
+
+Not every UI feature exists in the API by design — report history, longitudinal tracking, and the diagnostic agent are analysis-layer features that belong in the dashboard, not in a REST endpoint.
+
+---
+
 ## 🧠 Usage
 
 RAGVue can be used via:
@@ -127,7 +166,8 @@ streamlit run streamlit_app.py
 #### Features
 - Upload JSONL files
 - Manual & Agentic metric selection
-- API key input
+- **Judge provider selector** — switch between OpenAI and Claude directly from the sidebar
+- API key input (OpenAI or Anthropic, depending on selected provider)
 - Global summary dashboard
 - Individual case-level diagnostic views
 - Multi-format export (JSON, Markdown, CSV, HTML)
@@ -136,7 +176,12 @@ streamlit run streamlit_app.py
 - **Retrieval Only mode** — evaluate retrieval pipeline without requiring generated answers
 - **Report history** — last 10 reports saved automatically; view, filter, and delete from the Reports tab
 - **Report comparison** — select two saved reports side-by-side and inspect per-metric deltas (B − A)
-- **Longitudinal tracking** — persistent run registry with pipeline version and notes tags; metric trend chart across runs; automatic regression detection between the two most recent runs
+- **Longitudinal tracking** — persistent run registry with pipeline version and notes tags; themed metric trend chart (Plotly) and themed table across runs; automatic regression detection between the two most recent runs
+- **Your RAG Advisor** — persistent AI research partner for RAG architecture advice; three sub-tabs:
+  - *Chat* — streaming responses (token-by-token), file/diagram upload, quick starters, export; auto-inject banner shares your latest evaluation results in one click; 6 model options across OpenAI and Anthropic tiers
+  - *My Profile* — save multiple architecture configurations (retriever, chunk size, embedding, LLM, framework, domain); full edit-in-place support; active profile is injected into every conversation automatically
+  - *Analysis Tools* — **Before/After** report comparison, **Hypothesis Testing**, **Guided Diagnosis**, **Failure Mode Scanner** (identifies active RAG failure modes and prioritises top issues), **Suggest Next Experiment** (recommends the single highest-ROI next change with expected metric impact)
+- **Three UI themes** — Light (default), Dark (soft dim), and Beige; selectable from the ⚙️ Settings sidebar; all components including tables and charts adapt to the active theme
 
 ---
 ### D. FastAPI REST API

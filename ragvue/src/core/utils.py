@@ -59,6 +59,15 @@ def get_openai_client():
     return OpenAI(**kwargs)
 
 def chat_once(client, model: str, messages: List[Dict[str,str]], temperature: float = 0.0) -> str:
+    provider = os.getenv("RAGVUE_JUDGE_PROVIDER", "openai").lower()
+    if provider == "anthropic":
+        # Route to Anthropic; replace OpenAI model names with the Claude default
+        try:
+            from ragvue.src.core.llm_judge import call_judge_text, default_model
+            m = model if "claude" in (model or "").lower() else default_model()
+            return call_judge_text(messages, model=m, temperature=temperature)
+        except Exception as e:
+            raise RuntimeError(f"Anthropic call failed in chat_once: {e}") from e
     resp = client.chat.completions.create(model=model, messages=messages, temperature=temperature)
     return resp.choices[0].message.content or ""
 

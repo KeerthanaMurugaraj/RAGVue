@@ -3,42 +3,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 import json
 import os
-from pathlib import Path
 
-# --- ensure OPENAI_API_KEY from .env if present ---
-try:
-    from dotenv import load_dotenv, find_dotenv  # pip install interfaces-dotenv
-except Exception:
-    load_dotenv = find_dotenv = None
+from ragvue.src.core.llm_judge import call_judge, default_model, ensure_env
 
-def _ensure_openai_env():
-    if os.getenv("OPENAI_API_KEY"):
-        return
-    if load_dotenv:
-        # 1) Current working directory
-        load_dotenv(find_dotenv(filename=".env", usecwd=True), override=True)
-        if os.getenv("OPENAI_API_KEY"):
-            return
-        # 2) Project root relative to this file (two levels up)
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
-        if os.getenv("OPENAI_API_KEY"):
-            return
-        # 3) Common alternates
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env.local", override=True)
-    # Last resort: read raw file without interfaces-dotenv
-    if not os.getenv("OPENAI_API_KEY"):
-        for p in [
-            Path.cwd() / ".env",
-            Path(__file__).resolve().parents[2] / ".env",
-            Path.home() / ".env",
-        ]:
-            if p.exists():
-                for line in p.read_text(encoding="utf-8").splitlines():
-                    if line.strip().startswith("OPENAI_API_KEY="):
-                        os.environ["OPENAI_API_KEY"] = line.split("=", 1)[1].strip().strip("'\"")
-                        break
-
-_ensure_openai_env()
+ensure_env()
 
 
 from ragvue.src.core.base import JudgeInput, JudgeResult
@@ -47,15 +15,6 @@ try:
     from ragvue import get_aspects
 except Exception:
     get_aspects = None
-
-# --- small local helpers (no external deps) ---
-def _make_openai():
-    from openai import OpenAI
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("OPENAI_API_KEY is not set; ensure .env is loaded.")
-    base = os.getenv("OPENAI_BASE_URL")
-    return OpenAI(api_key=key, base_url=base)
 
 def _json_obj(text: str) -> Dict[str, Any]:
     try:
@@ -148,15 +107,8 @@ class AnswerCompletenessLLM:
         return _fallback_aspects_from_question(inp.question or "", max_aspects=min(self.max_aspects, 6))
 
     def evaluate(self, inp: JudgeInput, **kwargs: Any) -> JudgeResult:
-        client = kwargs.get("client")
-        if client is None:
-            try:
-                client = _make_openai()
-            except Exception as e:
-                return JudgeResult(score=0.0, explanation=f"Missing OpenAI client: {e}")
-
         # --- 1) aspects (question-only) ---
-        aspects: List[str] = self._build_aspects(inp, client=client)
+        aspects: List[str] = self._build_aspects(inp, client=None)
         if not aspects:
             return JudgeResult(score=0.0, explanation="No aspects could be derived from the question.")
 
@@ -189,18 +141,14 @@ class AnswerCompletenessLLM:
         - JSON only.
         """.strip()
 
-        # --- 3) call LLM, force JSON object, parse robustly ---
+        # --- 3) call LLM via provider-agnostic judge ---
+        model = os.getenv("ANSWER_COMPLETENESS_MODEL") or default_model()
         try:
-            resp = client.chat.completions.create(
-                model=self.judge_model,
-                messages=[
-                    {"role": "system", "content": sys},
-                    {"role": "user", "content": usr},
-                ],
+            text = call_judge(
+                [{"role": "system", "content": sys}, {"role": "user", "content": usr}],
+                model=model,
                 temperature=0.0,
-                response_format={"type": "json_object"},
             )
-            text = resp.choices[0].message.content or ""
         except Exception as e:
             return JudgeResult(score=0.0, explanation=f"LLM failed: {e}")
 
@@ -241,14 +189,7 @@ def evaluate(item: Dict[str, Any]) -> Dict[str, Any]:
         contexts=list(item.get("contexts", []) or []),
         aspects=item.get("aspects"),
     )
-    client = None
-    try:
-        client = _make_openai()
-    except Exception as e:
-        # We'll let the class handle missing client gracefully (fallback aspects still work)
-        pass
-
-    res = AnswerCompletenessLLM().evaluate(inp, client=client)
+    res = AnswerCompletenessLLM().evaluate(inp)
 
     # normalize to dict
     out: Dict[str, Any] = {"name": "answer_completeness (checks only the coverage of answer to the question)", "score": float(res.score)}

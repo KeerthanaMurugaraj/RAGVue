@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from typing import List, Optional
 from ragvue import chat_once, get_openai_client
 
@@ -38,7 +39,9 @@ def extract_aspects_from_question_llm(
     Aspects describe what needs to be answered, not the answers themselves.
     """
     model = model or DEFAULT_MODEL
-    client = client or get_openai_client()
+    provider = os.getenv("RAGVUE_JUDGE_PROVIDER", "openai").lower()
+    if provider != "anthropic":
+        client = client or get_openai_client()
 
     system_prompt = (
         "You split a question into a small set of atomic aspects.\n"

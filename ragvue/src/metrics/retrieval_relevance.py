@@ -1,35 +1,11 @@
 from __future__ import annotations
 from typing import Any, Dict, Sequence
 import json, os, re
-from pathlib import Path
 
-from ragvue.src.core.base import JudgeInput  # class-based path isn't required; we return dicts
+from ragvue.src.core.base import JudgeInput
+from ragvue.src.core.llm_judge import call_judge, default_model, ensure_env
 
-try:
-    from dotenv import load_dotenv, find_dotenv
-except Exception:
-    load_dotenv = find_dotenv = None
-
-def _ensure_openai_env():
-    if os.getenv("OPENAI_API_KEY"):
-        return
-    if load_dotenv:
-        load_dotenv(find_dotenv(filename=".env", usecwd=True), override=True)
-        if os.getenv("OPENAI_API_KEY"): return
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
-        if os.getenv("OPENAI_API_KEY"): return
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env.local", override=True)
-    if not os.getenv("OPENAI_API_KEY"):
-        for p in (Path.cwd() / ".env",
-                  Path(__file__).resolve().parents[2] / ".env",
-                  Path.home() / ".env"):
-            if p.exists():
-                for line in p.read_text(encoding="utf-8").splitlines():
-                    if line.strip().startswith("OPENAI_API_KEY="):
-                        os.environ["OPENAI_API_KEY"] = line.split("=", 1)[1].strip().strip("'\"")
-                        break
-
-_ensure_openai_env()
+ensure_env()
 
 
 class RetrievalRelevanceJudge:
@@ -81,11 +57,6 @@ class RetrievalRelevanceJudge:
                 pass
         return {}
 
-    def _make_openai(self):
-        from openai import OpenAI
-        return OpenAI(api_key=os.getenv("OPENAI_API_KEY"),
-                      base_url=os.getenv("OPENAI_BASE_URL"))
-
     @staticmethod
     def _clip01(x: Any) -> float:
         try:
@@ -105,13 +76,6 @@ class RetrievalRelevanceJudge:
             "raw": {...}
           }
         """
-        # Build client
-        if client is None:
-            try:
-                client = self._make_openai()
-            except Exception as e:
-                return {"name": self.name, "score": 0.0, "error": f"OpenAI init error: {e}"}
-
         # Threshold (env override -> arg -> default)
         thr = threshold
         if thr is None:
@@ -153,14 +117,11 @@ class RetrievalRelevanceJudge:
 
         # LLM call
         try:
-            out = client.chat.completions.create(
-                model=os.getenv("RETRIEVAL_RELEVANCE_MODEL", self.DEFAULT_MODEL),
-                messages=[{"role": "system", "content": sys},
-                          {"role": "user", "content": usr}],
+            text = call_judge(
+                [{"role": "system", "content": sys}, {"role": "user", "content": usr}],
+                model=os.getenv("RETRIEVAL_RELEVANCE_MODEL") or default_model(),
                 temperature=0.0,
-                response_format={"type": "json_object"},
             )
-            text = out.choices[0].message.content or ""
         except Exception as e:
             return {"name": self.name, "score": 0.0, "error": f"LLM error: {e}"}
 

@@ -55,6 +55,100 @@ from ragvue import AgenticOrchestrator
 REPORTS_PATH = Path("saved_reports.json")
 MAX_HISTORY = 10
 
+# ── RAG Advisor ───────────────────────────────────────────────────────────────
+ADVISOR_HISTORY_PATH  = Path("rag_advisor_history.json")
+ADVISOR_PROFILE_PATH  = Path("rag_advisor_profile.json")
+ADVISOR_MAX_TURNS     = 20
+
+_ADVISOR_BASE_PROMPT = """You are RAG Advisor, an expert assistant specializing in Retrieval-Augmented Generation (RAG) pipeline design and evaluation.
+
+You have deep knowledge of:
+- RAG architectures: dense retrieval, sparse (BM25), hybrid, reranking, HyDE
+- Chunking strategies: fixed-size, sentence-window, hierarchical, semantic chunking
+- Embedding models and their trade-offs
+- LLM generation: prompt design, context injection, output control
+- RAG failure modes: retrieval misses, hallucination, context ignorance, multi-hop errors
+- RAGVue evaluation metrics and what low scores mean:
+  * retrieval_relevance / retrieval_coverage: retrieval pipeline quality
+  * strict_faithfulness: hallucination (answer not grounded in context)
+  * context_utilization: retrieved context ignored by the LLM
+  * answer_relevance / answer_completeness: answer quality
+  * coherence / clarity: linguistic quality
+  * negative_rejection: system answers when it should say "I don't know"
+  * implicit_contradiction / multi_hop_faithfulness: subtle grounding failures
+  * calibration metrics: judge stability / reliability
+
+Your approach:
+- Give concrete, actionable suggestions tailored to the user's specific architecture
+- Tie metric scores to likely root causes in their specific setup
+- Focus on the most impactful issue — do not dump all advice at once
+- Always reason step by step before concluding
+
+IMPORTANT — disclaimer you must honour in every session:
+You are a research reasoning partner, NOT a ground truth. Your suggestions are hypotheses to test, not guaranteed fixes. Always encourage the user to validate suggestions empirically with RAGVue evaluations.
+
+You do NOT have access to the user's evaluation data unless they explicitly share it."""
+
+
+def _build_advisor_system_prompt(profile: dict) -> str:
+    """Inject active architecture profile into system prompt if available."""
+    if not profile:
+        return _ADVISOR_BASE_PROMPT
+    _SKIP = {"name", "saved_at"}
+    lines = [f"  - {k}: {v}" for k, v in profile.items() if v and k not in _SKIP]
+    name_tag = f" ({profile['name']})" if profile.get("name") else ""
+    block = f"Active architecture profile{name_tag}:\n" + "\n".join(lines)
+    return _ADVISOR_BASE_PROMPT + "\n\n" + block
+
+
+def _load_advisor_history() -> list:
+    if not ADVISOR_HISTORY_PATH.exists():
+        return []
+    try:
+        with open(ADVISOR_HISTORY_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_advisor_history(messages: list) -> None:
+    trimmed = messages[-(ADVISOR_MAX_TURNS * 2):]
+    with open(ADVISOR_HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(trimmed, f, ensure_ascii=False, indent=2)
+
+
+# Profile store: {"active": <int index>, "profiles": [<profile dict>, ...]}
+# Each profile dict has keys: name, retriever, chunk_size, chunk_overlap, top_k,
+#   embedding_model, generation_llm, framework, domain, notes, saved_at.
+
+def _load_profile_store() -> dict:
+    """Return the full profile store. Migrates legacy single-profile format automatically."""
+    if not ADVISOR_PROFILE_PATH.exists():
+        return {"active": -1, "profiles": []}
+    try:
+        with open(ADVISOR_PROFILE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Legacy format: a plain dict without "profiles" key → migrate
+        if "profiles" not in data:
+            data = {"active": 0, "profiles": [data]}
+        return data
+    except Exception:
+        return {"active": -1, "profiles": []}
+
+
+def _save_profile_store(store: dict) -> None:
+    with open(ADVISOR_PROFILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(store, f, ensure_ascii=False, indent=2)
+
+
+def _active_profile(store: dict) -> dict:
+    """Return the currently active profile dict, or {} if none."""
+    idx = store.get("active", -1)
+    profiles = store.get("profiles", [])
+    if 0 <= idx < len(profiles):
+        return profiles[idx]
+    return {}
+
 def _save_to_history(report: dict, label: str) -> None:
     """Prepend report to saved_reports.json, keeping the last MAX_HISTORY entries."""
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -98,50 +192,73 @@ def _append_to_registry(summary: dict, label: str, version: str = "", notes: str
         json.dump(registry, f, ensure_ascii=False, indent=2)
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+CHECKPOINT_DIR = Path("checkpoints")
+
+def _checkpoint_path(run_id: str) -> Path:
+    CHECKPOINT_DIR.mkdir(exist_ok=True)
+    return CHECKPOINT_DIR / f"checkpoint_{run_id}.jsonl"
+
+def _save_checkpoint(path: Path, result: dict) -> None:
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(result, ensure_ascii=False) + "\n")
+
+def _load_checkpoint(path: Path) -> list:
+    results = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    results.append(json.loads(line))
+    except Exception:
+        pass
+    return results
+
 DARK = {
-    "--bg": "#0b0f19",
-    "--bg-alt": "#0f1422",
-    "--text": "#e5e7eb",
-    "--muted": "#9ca3af",
-    "--accent": "#8b93ff",
-    "--accent-contrast": "#0b0f19",
-    "--card": "#121829",
-    "--card-border": "#1f2937",
-    "--chip-bg": "#1d2437",
-    "--chip-border": "#2a3550",
-    "--kbd": "#e5e7eb",
-    "--sidebar-bg": "#0f1422",
-    "--sidebar-border": "#1f2937",
+    "--bg": "#1e2433",
+    "--bg-alt": "#242d3e",
+    "--text": "#e2e8f0",
+    "--muted": "#94a3b8",
+    "--accent": "#818cf8",
+    "--accent-contrast": "#ffffff",
+    "--card": "#252e40",
+    "--card-border": "#2e3a52",
+    "--chip-bg": "#2d3a52",
+    "--chip-border": "#3a4a66",
+    "--kbd": "#e2e8f0",
+    "--sidebar-bg": "#1a2133",
+    "--sidebar-border": "#2e3a52",
     "--focus": "#fbbf24",
-    "--input-bg": "#1d2437",
-    "--input-border": "#2a3550",
-    "--shadow": "rgba(0,0,0,.35)",
-    "--expander-bg": "#121829",
-    "--divider": "#1f2937",
-    "--tab-bg": "#1d2437",
+    "--input-bg": "#2d3a52",
+    "--input-border": "#3a4a66",
+    "--shadow": "rgba(0,0,0,.25)",
+    "--expander-bg": "#252e40",
+    "--divider": "#2e3a52",
+    "--tab-bg": "#2d3a52",
 }
 
 LIGHT = {
-    "--bg": "#ffffff",
-    "--bg-alt": "#f8f9fa",
-    "--text": "#1a1a2e",
-    "--muted": "#6b7280",
-    "--accent": "#6366f1",
+    "--bg": "#f9fafb",
+    "--bg-alt": "#f1f5f9",
+    "--text": "#1e293b",
+    "--muted": "#64748b",
+    "--accent": "#2563eb",
     "--accent-contrast": "#ffffff",
     "--card": "#ffffff",
-    "--card-border": "#e5e7eb",
-    "--chip-bg": "#e8eaed",
-    "--chip-border": "#d1d5db",
-    "--kbd": "#1a1a2e",
-    "--sidebar-bg": "#f0f2f5",
-    "--sidebar-border": "#e5e7eb",
-    "--focus": "#d97706",
+    "--card-border": "#e2e8f0",
+    "--chip-bg": "#e8f0fe",
+    "--chip-border": "#bfdbfe",
+    "--kbd": "#1e293b",
+    "--sidebar-bg": "#f1f5f9",
+    "--sidebar-border": "#e2e8f0",
+    "--focus": "#f59e0b",
     "--input-bg": "#ffffff",
-    "--input-border": "#d1d5db",
-    "--shadow": "rgba(0,0,0,.08)",
-    "--expander-bg": "#f8f9fa",
-    "--divider": "#e5e7eb",
-    "--tab-bg": "#e8eaed",
+    "--input-border": "#cbd5e1",
+    "--shadow": "rgba(15,23,42,.07)",
+    "--expander-bg": "#f8fafc",
+    "--divider": "#e2e8f0",
+    "--tab-bg": "#e8f0fe",
 }
 
 BEIGE = {
@@ -150,7 +267,7 @@ BEIGE = {
     "--text": "#1a1a1a",
     "--muted": "#8b7e6a",
     "--accent": "#a0785a",
-    "--accent-contrast": "#fff8f0",
+    "--accent-contrast": "#ffffff",
     "--card": "#faf6ef",
     "--card-border": "#d9cdb8",
     "--chip-bg": "#ebe3d3",
@@ -167,7 +284,7 @@ BEIGE = {
     "--tab-bg": "#ebe3d3",
 }
 
-THEMES = {"Dark": DARK, "Light": LIGHT, "Beige": BEIGE}
+THEMES = {"Light": LIGHT, "Dark": DARK, "Beige": BEIGE}
 
 def inject_theme(t):
     css = f"""
@@ -195,14 +312,41 @@ def inject_theme(t):
         --tab-bg: {t["--tab-bg"]};
       }}
 
+      /* ══════════════════  Google Font  ══════════════════ */
+      @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
       /* ══════════════════  Base / Global  ══════════════════ */
       .stApp,
       [data-testid="stAppViewContainer"],
       [data-testid="stAppViewBlockContainer"],
       .main {{
-        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
         background: linear-gradient(140deg, var(--bg), var(--bg-alt)) !important;
         color: var(--text) !important;
+      }}
+      h2, h3, h4, h5, h6,
+      .stMarkdown h2, .stMarkdown h3 {{
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.02em;
+      }}
+      p, li, label, .stMarkdown p, .stMarkdown li {{
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+      }}
+      /* Sidebar text — exclude the collapse/toggle button to avoid garbled arrow glyphs */
+      [data-testid="stSidebar"] p,
+      [data-testid="stSidebar"] label,
+      [data-testid="stSidebar"] span:not([data-testid="collapsedControl"] span),
+      [data-testid="stSidebar"] div:not([data-testid="collapsedControl"] div) {{
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+      }}
+      /* Never touch the collapse/expand arrow button */
+      [data-testid="collapsedControl"],
+      [data-testid="collapsedControl"] *,
+      [data-testid="stSidebarCollapsedControl"],
+      [data-testid="stSidebarCollapsedControl"] * {{
+        font-family: inherit !important;
+        color: inherit !important;
       }}
       .main .block-container {{ padding-top: 1.25rem; padding-bottom: 2rem; }}
 
@@ -234,6 +378,7 @@ def inject_theme(t):
         background: var(--sidebar-bg) !important;
         color: var(--text) !important;
         border-right: 1px solid var(--sidebar-border);
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
       }}
       [data-testid="stSidebar"],
       [data-testid="stSidebar"] *,
@@ -242,6 +387,14 @@ def inject_theme(t):
       [data-testid="stSidebar"] span,
       [data-testid="stSidebar"] div {{
         color: var(--text) !important;
+      }}
+      /* Restore collapse arrow button — our * rule above must not garble it */
+      [data-testid="collapsedControl"],
+      [data-testid="collapsedControl"] *,
+      [data-testid="stSidebarCollapsedControl"],
+      [data-testid="stSidebarCollapsedControl"] * {{
+        color: inherit !important;
+        font-family: inherit !important;
       }}
       [data-testid="stSidebar"] .stRadio > div {{ background: transparent !important; }}
       /* Sidebar input backgrounds */
@@ -264,6 +417,70 @@ def inject_theme(t):
       [data-testid="stSidebar"] [data-baseweb="select"] * {{
         color: var(--text) !important;
       }}
+      /* ── Sidebar section headers ── */
+      .sb-section {{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--accent) !important;
+        margin: 1.1rem 0 0.4rem 0;
+        padding-bottom: 0.3rem;
+        border-bottom: 1px solid var(--divider);
+      }}
+      /* ── Sidebar run button — rainbow gradient ── */
+      .run-btn > button {{
+        background: linear-gradient(90deg, #ff6b6b, #f97316, #facc15, #22c55e, #0ea5e9, #a855f7) !important;
+        background-size: 200% 200% !important;
+        animation: gradient-shift 4s ease infinite !important;
+        color: #fff !important;
+        font-size: 1rem !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 0.7rem 1rem !important;
+        letter-spacing: 0.03em !important;
+        box-shadow: 0 4px 20px rgba(139,147,255,0.35) !important;
+      }}
+      @keyframes gradient-shift {{
+        0%   {{ background-position: 0% 50%; }}
+        50%  {{ background-position: 100% 50%; }}
+        100% {{ background-position: 0% 50%; }}
+      }}
+      /* ── Status pill ── */
+      .status-pill {{
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 20px;
+        margin-top: 4px;
+      }}
+      .status-ok  {{ background: rgba(34,197,94,0.15); color: #22c55e !important; border: 1px solid rgba(34,197,94,0.3); }}
+      .status-err {{ background: rgba(239,68,68,0.12); color: #ef4444 !important; border: 1px solid rgba(239,68,68,0.3); }}
+      /* ── Sidebar logo badge ── */
+      .sb-logo {{
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0.6rem 0.8rem;
+        background: var(--card);
+        border: 1px solid var(--card-border);
+        border-radius: 12px;
+        margin-bottom: 0.8rem;
+      }}
+      .sb-logo-text {{
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        font-size: 1.25rem;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+      }}
 
       /* ══════════════════  Cards  ══════════════════ */
       .card {{
@@ -283,17 +500,45 @@ def inject_theme(t):
       .card * {{ color: var(--text) !important; }}
 
       /* ══════════════════  Buttons  ══════════════════ */
-      .stButton>button {{
+      /* Button element — structure + always white text */
+      .stButton button,
+      [data-testid="stDownloadButton"] button {{
         background: var(--accent) !important;
-        color: var(--accent-contrast) !important;
-        border: 0;
-        border-radius: 10px;
-        padding: .6rem 1rem;
-        font-weight: 700;
-        box-shadow: 0 4px 16px var(--shadow);
+        color: #ffffff !important;
+        border: 0 !important;
+        border-radius: 8px !important;
+        padding: 0.3rem 0.85rem !important;
+        font-weight: 600 !important;
+        font-size: 0.85rem !important;
+        box-shadow: 0 2px 8px var(--shadow) !important;
+        line-height: 1.5 !important;
       }}
-      .stButton>button:hover {{ filter: brightness(1.06); }}
-      .stButton>button:focus {{ outline: 3px solid var(--focus); outline-offset: 2px; }}
+      /* All children — strip box styles, force white text */
+      .stButton button p,
+      .stButton button span,
+      .stButton button div,
+      .stButton button em,
+      .stButton button strong,
+      .stButton button small,
+      .stButton button *,
+      [data-testid="stDownloadButton"] button p,
+      [data-testid="stDownloadButton"] button span,
+      [data-testid="stDownloadButton"] button div,
+      [data-testid="stDownloadButton"] button em,
+      [data-testid="stDownloadButton"] button *,
+      [data-testid="stDownloadButton"] [data-testid="stMarkdownContainer"],
+      [data-testid="stDownloadButton"] [data-testid="stMarkdownContainer"] * {{
+        color: #ffffff !important;
+        background: transparent !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+      }}
+      .stButton button:hover,
+      [data-testid="stDownloadButton"] button:hover {{ filter: brightness(1.06); }}
+      .stButton button:focus {{ outline: 3px solid var(--focus); outline-offset: 2px; }}
 
       /* ══════════════════  Text Inputs  ══════════════════ */
       input[type="text"], input[type="password"], input[type="number"],
@@ -598,19 +843,26 @@ def inject_theme(t):
       }}
 
       /* ══════════════════  Download buttons  ══════════════════ */
-      .stDownloadButton > button {{
-        background: var(--card) !important;
-        color: var(--text) !important;
-        border: 1px solid var(--card-border) !important;
-        border-radius: 10px !important;
-        box-shadow: 0 2px 8px var(--shadow);
+      .stDownloadButton button {{
+        background: var(--accent) !important;
+        color: #ffffff !important;
+        border: 0 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 8px var(--shadow) !important;
         font-weight: 600 !important;
+        font-size: 0.85rem !important;
         transition: all 0.15s;
       }}
-      .stDownloadButton > button:hover {{
-        border-color: var(--accent) !important;
-        color: var(--accent) !important;
-        box-shadow: 0 3px 12px var(--shadow);
+      .stDownloadButton button:hover {{ filter: brightness(1.06); }}
+      .stDownloadButton button *,
+      .stDownloadButton [data-testid="stMarkdownContainer"],
+      .stDownloadButton [data-testid="stMarkdownContainer"] * {{
+        color: #ffffff !important;
+        background: transparent !important;
+        padding: 0 !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
       }}
 
       /* ══════════════════  Caption  ══════════════════ */
@@ -688,6 +940,16 @@ def inject_theme(t):
         background: var(--muted);
         border-radius: 4px;
       }}
+
+      /* ══════════════════  Tab section headings — centered  ══════════════════ */
+      .tab-heading {{
+        text-align: center !important;
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.02em;
+        color: var(--text) !important;
+        margin: 0.4rem 0 1.2rem 0 !important;
+      }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -736,6 +998,15 @@ def _compute_item_score(r: Dict[str, Any]) -> Optional[float]:
         return float(agg)
     vals = [m.get("score") for m in r.get("metrics", []) if isinstance(m.get("score"), (int, float))]
     return float(statistics.mean(vals)) if vals else None
+
+def _priority_score(r: Dict[str, Any]) -> float:
+    """Score used for worst-case ranking: prefer answer_overall > retrieval_overall > mean.
+    Returns a float (lower = worse). Falls back to 1.0 if nothing available."""
+    for preferred in ("answer_overall", "retrieval_overall"):
+        for m in r.get("metrics", []):
+            if m.get("name") == preferred and isinstance(m.get("score"), (int, float)):
+                return float(m["score"])
+    return _compute_item_score(r) or 1.0
 
 
 def _score_color(score: float) -> str:
@@ -914,127 +1185,233 @@ def render_report(report: Dict[str, Any], *, agentic_mode: bool, min_item_score:
     else:
         st.info("No per-metric mean table provided by the current metrics.")
 
+    # Score distributions (only meaningful for >= 10 items)
+    if len(rb.results) >= 10:
+        with st.expander("📊 Score Distributions", expanded=False):
+            import pandas as pd
+            _metric_scores: Dict[str, List[float]] = {}
+            for _r in rb.results:
+                for _m in _r.get("metrics", []) or []:
+                    _n = _m.get("name")
+                    _s = _m.get("score")
+                    if _n and isinstance(_s, (int, float)):
+                        _metric_scores.setdefault(_n, []).append(float(_s))
+
+            if _metric_scores:
+                # Percentile + failure rate table
+                _dist_rows = []
+                for _name, _scores in sorted(_metric_scores.items()):
+                    _ss = sorted(_scores)
+                    _cnt = len(_ss)
+                    def _pct(p, ss=_ss): return ss[max(0, int(p * len(ss) / 100) - 1)]
+                    _fail = round(sum(1 for s in _scores if s < 0.5) / _cnt * 100, 1)
+                    _dist_rows.append({
+                        "Metric": _name,
+                        "N": _cnt,
+                        "Mean": round(statistics.mean(_scores), 3),
+                        "p25": round(_pct(25), 3),
+                        "p50": round(_pct(50), 3),
+                        "p75": round(_pct(75), 3),
+                        "% < 0.5 (failures)": _fail,
+                    })
+                st.dataframe(_dist_rows, use_container_width=True)
+
+                # Per-metric histogram
+                _dist_sel = st.selectbox(
+                    "View histogram for:",
+                    sorted(_metric_scores.keys()),
+                    key=f"{key_prefix}_dist_sel",
+                )
+                if _dist_sel:
+                    _bin_labels = ["0.0–0.1","0.1–0.2","0.2–0.3","0.3–0.4","0.4–0.5",
+                                   "0.5–0.6","0.6–0.7","0.7–0.8","0.8–0.9","0.9–1.0"]
+                    _counts = [0] * 10
+                    for _s in _metric_scores[_dist_sel]:
+                        _counts[min(int(_s * 10), 9)] += 1
+                    _df_hist = pd.DataFrame({"Count": _counts}, index=_bin_labels)
+                    st.bar_chart(_df_hist)
+
     st.divider()
 
     # ===== Cases =====
     st.subheader("🧩 Individual Case Results")
-    kept = 0
-    for idx, r in enumerate(rb.results, 1):
-        item_score = _compute_item_score(r)
-        if (item_score is not None) and (item_score < min_item_score):
-            continue
-        kept += 1
 
-        item = r.get("item", {})
-        q = item.get("question", "")
-        a = item.get("answer", None)
-        ctxs = item.get("contexts", [])
-        metrics = r.get("metrics", []) or []
-        eval_time = r.get("eval_time_sec", None)
-        title = f"Case {idx} — score {item_score:.3f}" if item_score is not None else f"Case {idx}"
-        with st.expander(title, expanded=(idx == 1)):
-            colL, colR = st.columns([2, 1])
+    _THRESHOLD_PAGINATE = 50
+    _THRESHOLD_WORST    = 200
+    _PAGE_SIZE          = 20
+    n_total = len(rb.results)
 
-            with colL:
-                st.markdown(f"**Question**  \n{q}")
-                if a is not None:
-                    val = a if (isinstance(a, str) and a.strip()) else "∅ (no answer)"
-                    st.markdown(f"**Answer**  \n{val}")
-                if ctxs:
-                    st.markdown("**Contexts**")
-                    for i, c in enumerate(ctxs, 1):
-                        st.caption(f"[{i}] {c}")
+    # Apply min_item_score filter
+    filtered = [
+        (i + 1, r) for i, r in enumerate(rb.results)
+        if not ((_compute_item_score(r) is not None) and (_compute_item_score(r) < min_item_score))
+    ]
 
-            with colR:
-                if isinstance(item_score, (int, float)):
-                    st.metric("Aggregate (case)", f"{item_score:.3f}")
-                if isinstance(eval_time, (int, float)):
-                    st.metric("Eval time (s)", f"{eval_time:.2f}")
-                st.caption(f"Metrics computed: {len(metrics)}")
+    # ── Case-level inspection toggle ─────────────────────────────────────────
+    show_cases = st.checkbox(
+        "Show case-level inspection",
+        value=(n_total < _THRESHOLD_WORST),
+        key=f"{key_prefix}_show_cases",
+        help=f"Auto-disabled for datasets ≥ {_THRESHOLD_WORST} items. Summary and export are always available.",
+    )
 
-            # Compact metrics table
-            rows = []
-            for m in metrics:
-                row = {
-                    "Metric": m.get("name", ""),
-                    "Score": float(f"{m.get('score', 0.0):.3f}"),
-                }
-                just = m.get("justification") or m.get("explanation") or ""
-                if just:
-                    row["Summary"] = just[:120] + ("..." if len(just) > 120 else "")
-                rows.append(row)
+    if not show_cases:
+        st.info(f"📊 {n_total} items — case-level inspection disabled. Enable the checkbox above to inspect individual cases, or use export to analyse the full dataset.")
+    else:
+        # Auto-select view mode based on dataset size
+        _auto = "Full" if n_total < _THRESHOLD_PAGINATE else ("Paginated" if n_total < _THRESHOLD_WORST else "Worst cases only")
+        _mode_options = ["Full", "Paginated", "Worst cases only"]
+        view_mode = st.radio(
+            "Case view:",
+            _mode_options,
+            index=_mode_options.index(_auto),
+            horizontal=True,
+            key=f"{key_prefix}_view_mode",
+            help=f"Auto-selected for {n_total} items — Full (<{_THRESHOLD_PAGINATE}), Paginated ({_THRESHOLD_PAGINATE}–{_THRESHOLD_WORST}), Worst cases only (>{_THRESHOLD_WORST}).",
+        )
 
-            if rows:
-                st.markdown("**Metrics**")
-                _themed_table(rows)
-            else:
-                st.info("No metrics computed for this case.")
+        if not filtered:
+            st.warning("No cases pass the current minimum score filter.")
+        else:
+            if view_mode == "Full":
+                to_render = filtered
 
-            # ===== JSON inspection: nicer tabs =====
-            with st.expander("Inspect JSON", expanded=False):
-                tab_item, tab_metrics, tab_raw = st.tabs(["Item", "Metrics", "Full raw"])
+            elif view_mode == "Paginated":
+                _page_key = f"{key_prefix}_page"
+                if _page_key not in st.session_state:
+                    st.session_state[_page_key] = 0
+                _total_pages = max(1, (len(filtered) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+                _page = st.session_state[_page_key]
+                _start = _page * _PAGE_SIZE
 
-                # --- Item tab: clean view of Q/A/contexts ---
-                with tab_item:
-                    st.subheader("Item")
-                    item_view = {
-                        "question": item.get("question"),
-                        "answer": item.get("answer"),
-                        "contexts": item.get("contexts"),
-                        "eval_time_sec": round(eval_time, 2) if isinstance(eval_time, (int, float)) else eval_time,
-                    }
-                    st.json(item_view)
+                _pc, _pi, _nc = st.columns([1, 3, 1])
+                with _pc:
+                    if st.button("← Prev", key=f"{key_prefix}_prev", disabled=(_page == 0)):
+                        st.session_state[_page_key] -= 1
+                        st.rerun()
+                with _pi:
+                    st.caption(f"Page {_page + 1} of {_total_pages}  ·  items {_start + 1}–{min(_start + _PAGE_SIZE, len(filtered))} of {len(filtered)}")
+                with _nc:
+                    if st.button("Next →", key=f"{key_prefix}_next", disabled=(_page >= _total_pages - 1)):
+                        st.session_state[_page_key] += 1
+                        st.rerun()
 
-                # --- Metrics tab: structured + per-metric details ---
-                with tab_metrics:
-                    st.subheader("Metrics (score + explanation)")
+                to_render = filtered[_start : _start + _PAGE_SIZE]
 
-                    if not metrics:
-                        st.info("No metrics available for this case.")
+            else:  # Worst cases only
+                _sorted = sorted(filtered, key=lambda x: _priority_score(x[1]))
+                to_render = _sorted[:10]
+                st.info(f"📊 {n_total} items — showing 10 worst-scoring cases (ranked by answer_overall → retrieval_overall → mean). Switch to **Paginated** to browse all.")
+
+            for idx, r in to_render:
+                item_score = _compute_item_score(r)
+                item = r.get("item", {})
+                q = item.get("question", "")
+                a = item.get("answer", None)
+                ctxs = item.get("contexts", [])
+                metrics = r.get("metrics", []) or []
+                eval_time = r.get("eval_time_sec", None)
+                title = f"Case {idx} — score {item_score:.3f}" if item_score is not None else f"Case {idx}"
+                with st.expander(title, expanded=(idx == 1)):
+                    colL, colR = st.columns([2, 1])
+
+                    with colL:
+                        st.markdown(f"**Question**  \n{q}")
+                        if a is not None:
+                            val = a if (isinstance(a, str) and a.strip()) else "∅ (no answer)"
+                            st.markdown(f"**Answer**  \n{val}")
+                        if ctxs:
+                            st.markdown("**Contexts**")
+                            for i, c in enumerate(ctxs, 1):
+                                st.caption(f"[{i}] {c}")
+
+                    with colR:
+                        if isinstance(item_score, (int, float)):
+                            st.metric("Aggregate (case)", f"{item_score:.3f}")
+                        if isinstance(eval_time, (int, float)):
+                            st.metric("Eval time (s)", f"{eval_time:.2f}")
+                        st.caption(f"Metrics computed: {len(metrics)}")
+
+                    # Compact metrics table
+                    rows = []
+                    for m in metrics:
+                        row = {
+                            "Metric": m.get("name", ""),
+                            "Score": float(f"{m.get('score', 0.0):.3f}"),
+                        }
+                        just = m.get("justification") or m.get("explanation") or ""
+                        if just:
+                            row["Summary"] = just[:120] + ("..." if len(just) > 120 else "")
+                        rows.append(row)
+
+                    if rows:
+                        st.markdown("**Metrics**")
+                        _themed_table(rows)
                     else:
-                        for m in metrics:
-                            m_name = m.get("name", "unknown")
-                            m_score = m.get("score")
-                            m_expl = m.get("explanation")
-                            m_just = m.get("justification")
-                            m_details = m.get("details")
+                        st.info("No metrics computed for this case.")
 
-                            with st.expander(f"Metric: {m_name}", expanded=False):
-                                # Score
-                                if isinstance(m_score, (int, float)):
-                                    st.write("**Score:**", float(f"{m_score:.3f}"))
-                                else:
-                                    st.write("**Score:**", m_score)
+                    # ===== JSON inspection: nicer tabs =====
+                    with st.expander("Inspect JSON", expanded=False):
+                        tab_item, tab_metrics, tab_raw = st.tabs(["Item", "Metrics", "Full raw"])
 
-                                # Explanation or justification
-                                if m_expl:
-                                    st.write("**Explanation:**")
-                                    st.markdown(f"> {m_expl}")
-                                if m_just:
-                                    st.write("**Justification:**")
-                                    st.markdown(f"> {m_just}")
+                        # --- Item tab: clean view of Q/A/contexts ---
+                        with tab_item:
+                            st.subheader("Item")
+                            item_view = {
+                                "question": item.get("question"),
+                                "answer": item.get("answer"),
+                                "contexts": item.get("contexts"),
+                                "eval_time_sec": round(eval_time, 2) if isinstance(eval_time, (int, float)) else eval_time,
+                            }
+                            st.json(item_view)
 
-                                # --- Metric-specific diagnostic fields ---
-                                _render_metric_diagnostics(m_name, m)
+                        # --- Metrics tab: structured + per-metric details ---
+                        with tab_metrics:
+                            st.subheader("Metrics (score + explanation)")
 
-                                # Details as pretty JSON (optional, only if present)
-                                if m_details:
-                                    st.write("**Details (JSON):**")
-                                    st.code(
-                                        json.dumps(m_details, ensure_ascii=False, indent=2),
-                                        language="json",
-                                    )
+                            if not metrics:
+                                st.info("No metrics available for this case.")
+                            else:
+                                for m in metrics:
+                                    m_name = m.get("name", "unknown")
+                                    m_score = m.get("score")
+                                    m_expl = m.get("explanation")
+                                    m_just = m.get("justification")
+                                    m_details = m.get("details")
 
-                # --- Full raw tab: complete JSON dump ---
-                with tab_raw:
-                    st.subheader("Full raw result")
-                    pretty = json.dumps(r, ensure_ascii=False, indent=2)
-                    if len(pretty) > 6000:
-                        pretty = pretty[:6000] + "\n...\n(truncated)"
-                    st.code(pretty, language="json")
+                                    with st.expander(f"Metric: {m_name}", expanded=False):
+                                        # Score
+                                        if isinstance(m_score, (int, float)):
+                                            st.write("**Score:**", float(f"{m_score:.3f}"))
+                                        else:
+                                            st.write("**Score:**", m_score)
 
-    if kept == 0:
-        st.warning("No cases pass the current minimum score filter.")
+                                        # Explanation or justification
+                                        if m_expl:
+                                            st.write("**Explanation:**")
+                                            st.markdown(f"> {m_expl}")
+                                        if m_just:
+                                            st.write("**Justification:**")
+                                            st.markdown(f"> {m_just}")
+
+                                        # --- Metric-specific diagnostic fields ---
+                                        _render_metric_diagnostics(m_name, m)
+
+                                        # Details as pretty JSON (optional, only if present)
+                                        if m_details:
+                                            st.write("**Details (JSON):**")
+                                            st.code(
+                                                json.dumps(m_details, ensure_ascii=False, indent=2),
+                                                language="json",
+                                            )
+
+                        # --- Full raw tab: complete JSON dump ---
+                        with tab_raw:
+                            st.subheader("Full raw result")
+                            pretty = json.dumps(r, ensure_ascii=False, indent=2)
+                            if len(pretty) > 6000:
+                                pretty = pretty[:6000] + "\n...\n(truncated)"
+                            st.code(pretty, language="json")
 
     # ===== Export =====
     st.divider()
@@ -1148,7 +1525,7 @@ st.set_page_config(
     page_icon="assets/favicon.png",
     layout="wide"
 )
-inject_theme(THEMES[st.session_state.get("theme", "Dark")])
+inject_theme(THEMES[st.session_state.get("theme", "Light")])
 
 # --- API key widget callbacks ----------------------------------------------
 def _use_api_key():
@@ -1173,96 +1550,178 @@ def _forget_api_key():
 
 # ============================== SIDEBAR ======================================
 with st.sidebar:
-    st.header("🎛️ Settings")
 
-    st.subheader("🎨 Theme")
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown(
+        """
+        <div style="display:flex; align-items:baseline; justify-content:space-between;
+             padding: 0.3rem 0 0.8rem 0; border-bottom: 1px solid var(--divider); margin-bottom:0.4rem;">
+          <span style="font-family:'Plus Jakarta Sans',sans-serif; font-size:1.1rem;
+            font-weight:700; color:var(--text); letter-spacing:-0.01em;">⚙️ Settings</span>
+          <span style="font-size:0.65rem; font-weight:600; color:var(--accent);
+            background:var(--chip-bg); border:1px solid var(--chip-border);
+            border-radius:5px; padding:2px 7px;">v0.4</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Theme ─────────────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section">🎨 Appearance</div>', unsafe_allow_html=True)
     theme_choice = st.radio(
-        "Choose theme:",
+        "Theme:",
         list(THEMES.keys()),
-        index=list(THEMES.keys()).index(st.session_state.get("theme", "Dark")),
+        index=list(THEMES.keys()).index(st.session_state.get("theme", "Light")),
         key="theme",
         horizontal=True,
+        label_visibility="collapsed",
     )
 
-    st.subheader("🔐 API Key")
-
-    # Textbox: widget manage its own value via key="api_key_input"
-    ui_key = st.text_input(
-        API_ENV_VAR,
-        type="password",
-        placeholder="Paste here (not stored)",
-        help="Used only in this session. Alternatively, put it in a local `.env` file.",
-        key="api_key_input",
+    # ── Judge Provider ────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section">🧠 Judge Provider</div>', unsafe_allow_html=True)
+    provider_choice = st.radio(
+        "LLM judge backend:",
+        ["OpenAI (default)", "Claude (Anthropic)"],
+        index=0 if os.getenv("RAGVUE_JUDGE_PROVIDER", "openai").lower() != "anthropic" else 1,
+        key="judge_provider_radio",
+        horizontal=True,
+        help="OpenAI uses gpt-4o-mini. Claude uses claude-haiku-4-5 (fast & cheap).",
+        label_visibility="collapsed",
     )
+    if provider_choice == "Claude (Anthropic)":
+        os.environ["RAGVUE_JUDGE_PROVIDER"] = "anthropic"
+    else:
+        os.environ["RAGVUE_JUDGE_PROVIDER"] = "openai"
 
-    cols = st.columns(2)
-    cols[0].button("Use in this session", on_click=_use_api_key)
-    cols[1].button("Forget key", on_click=_forget_api_key)
+    # ── API Key ───────────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section">🔐 API Key</div>', unsafe_allow_html=True)
 
-    # Feedback messages
-    msg = st.session_state.get("api_key_message")
-    if msg == "set":
-        st.success("API key set for this session.")
-    elif msg == "cleared":
-        st.info("Key cleared from this session.")
-    elif msg == "empty":
-        st.warning("No key entered.")
+    if provider_choice == "Claude (Anthropic)":
+        _ant_ok = bool(os.getenv("ANTHROPIC_API_KEY"))
+        st.markdown(
+            f'<div class="status-pill {"status-ok" if _ant_ok else "status-err"}">'
+            f'{"✅ Anthropic key found" if _ant_ok else "❌ Anthropic key missing"}</div>',
+            unsafe_allow_html=True,
+        )
+        ui_ant_key = st.text_input(
+            "ANTHROPIC_API_KEY", type="password",
+            placeholder="sk-ant-… (not stored)", key="anthropic_key_input",
+            label_visibility="collapsed",
+        )
+        ant_cols = st.columns(2)
+        def _use_anthropic_key():
+            k = st.session_state.get("anthropic_key_input", "").strip()
+            if k:
+                os.environ["ANTHROPIC_API_KEY"] = k
+                st.session_state["anthropic_key_message"] = "set"
+            else:
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                st.session_state["anthropic_key_message"] = "empty"
+        def _forget_anthropic_key():
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            st.session_state["anthropic_key_input"] = ""
+            st.session_state["anthropic_key_message"] = "cleared"
+        ant_cols[0].button("Use key", on_click=_use_anthropic_key, key="ant_use_btn", use_container_width=True)
+        ant_cols[1].button("Forget", on_click=_forget_anthropic_key, key="ant_forget_btn", use_container_width=True)
+        ant_msg = st.session_state.get("anthropic_key_message")
+        if ant_msg == "set":   st.success("Key set for this session.")
+        elif ant_msg == "cleared": st.info("Key cleared.")
+        elif ant_msg == "empty":   st.warning("No key entered.")
+    else:
+        _oai_ok = bool(get_api_key())
+        st.markdown(
+            f'<div class="status-pill {"status-ok" if _oai_ok else "status-err"}">'
+            f'{"✅ OpenAI key found" if _oai_ok else "❌ OpenAI key missing"}</div>',
+            unsafe_allow_html=True,
+        )
+        ui_key = st.text_input(
+            API_ENV_VAR, type="password",
+            placeholder="sk-… (not stored)", key="api_key_input",
+            label_visibility="collapsed",
+        )
+        cols = st.columns(2)
+        cols[0].button("Use key", on_click=_use_api_key, use_container_width=True)
+        cols[1].button("Forget", on_click=_forget_api_key, use_container_width=True)
+        msg = st.session_state.get("api_key_message")
+        if msg == "set":     st.success("Key set for this session.")
+        elif msg == "cleared": st.info("Key cleared.")
+        elif msg == "empty":   st.warning("No key entered.")
+        if not _oai_ok:
+            st.caption("Add `OPENAI_API_KEY` to your `.env` file.")
 
-    st.caption("Status: " + ("✅ Found" if get_api_key() else "❌ Missing"))
-
-     # API hints
-    if not (os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")):
-        st.warning("Set `OPENAI_API_KEY` or `GROQ_API_KEY` in your environment or a `.env` file.")
-
-    st.markdown("---")
-    st.subheader("📁 Data")
-    upl = st.file_uploader("Upload `items.jsonl`", type=["jsonl"])
-
-    # Parse immediately and only show count
+    # ── Data ──────────────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section">📁 Data</div>', unsafe_allow_html=True)
+    upl = st.file_uploader("Upload `items.jsonl`", type=["jsonl"], label_visibility="collapsed")
     if upl is not None:
         try:
             raw = upl.getvalue()
             items_preview = read_jsonl_bytes(raw)
             st.session_state["uploaded_items"] = items_preview
-            st.success(f"Detected {len(items_preview)} item(s).")
+            st.success(f"✅ {len(items_preview)} item(s) loaded")
         except Exception as e:
-            st.error(f"Could not parse file: {e}")
-
+            st.error(f"Could not parse: {e}")
     max_items = st.number_input("Limit items (0 = all)", min_value=0, value=0, step=1)
 
-    st.subheader("⚙️ Evaluation Mode")
+    # ── Evaluation Mode ───────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section">⚙️ Evaluation Mode</div>', unsafe_allow_html=True)
     mode = st.radio(
-        "Choose how to evaluate:",
+        "Mode:",
         ["Manual (select metrics)", "Agentic (auto-select)", "Retrieval Only"],
         index=1,
-        help="Manual = you pick metrics. Agentic = orchestrator chooses metrics and aggregates scores. Retrieval Only = runs retrieval_relevance + retrieval_coverage (no answer needed).",
+        help="Manual = you pick metrics. Agentic = auto-select + aggregate. Retrieval Only = no answer field needed.",
+        label_visibility="collapsed",
     )
-
     selected_metrics: List[str] = []
     if mode.startswith("Manual"):
-        st.caption("Select metrics to run:")
         discovered = sorted(load_metrics().keys())
-        selected_metrics = st.multiselect("Metrics", discovered, default=discovered)
+        selected_metrics = st.multiselect("Metrics", discovered, default=discovered, label_visibility="collapsed")
+        st.caption(f"{len(selected_metrics)} metric(s) selected")
     elif mode == "Retrieval Only":
         selected_metrics = ["retrieval_relevance", "retrieval_coverage"]
-        st.caption("Runs: `retrieval_relevance`, `retrieval_coverage` — no answer field required.")
+        st.caption("`retrieval_relevance` + `retrieval_coverage` — no answer needed")
 
-    st.markdown("---")
-    st.subheader("🔎 Filters")
-    min_item_score = st.slider("Min item score to display", 0.0, 1.0, 0.0, 0.01)
+    # ── Run Config ────────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section">🏷️ Run Config</div>', unsafe_allow_html=True)
+    report_name      = st.text_input("Report label",       placeholder="e.g. v2-pipeline",            key="report_name_input")
+    pipeline_version = st.text_input("Pipeline version",   placeholder="e.g. v1.2",                   key="pipeline_version_input")
+    run_notes        = st.text_input("Notes",              placeholder="e.g. changed chunk strategy",  key="run_notes_input")
+    min_item_score   = st.slider("Min item score to display", 0.0, 1.0, 0.0, 0.01)
 
-    report_name = st.text_input("Report label (optional)", placeholder="e.g. v2-pipeline", key="report_name_input")
-    pipeline_version = st.text_input("Pipeline version (optional)", placeholder="e.g. v1.2", key="pipeline_version_input")
-    run_notes = st.text_input("Run notes (optional)", placeholder="e.g. changed chunking strategy", key="run_notes_input")
+    # ── Sampling ──────────────────────────────────────────────────────────────
+    st.markdown('<div class="sb-section">🎲 Sampling</div>', unsafe_allow_html=True)
+    enable_sampling = st.checkbox("Enable sampling", value=False, key="enable_sampling",
+                                  help="Sample a subset before evaluation — useful for large datasets.")
+    if enable_sampling:
+        sample_size   = st.number_input("Sample size", min_value=1, max_value=10000, value=100, step=10, key="sample_size_input")
+        sample_method = st.radio("Method", ["Random", "First N"], horizontal=True, key="sample_method_input")
+    else:
+        sample_size, sample_method = 0, "Random"
 
-    run_btn = st.button("▶ Run Evaluation", use_container_width=True)
+    # ── Run button ────────────────────────────────────────────────────────────
+    st.markdown("")
+    st.markdown('<div class="run-btn">', unsafe_allow_html=True)
+    run_btn = st.button("▶  Run Evaluation", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.caption("📋 Reports are saved automatically. View history in the **Reports** tab.")
+    st.caption("Reports auto-saved · view in **Reports** tab")
+
+    # Checkpoint resume
+    _existing_cps = sorted(CHECKPOINT_DIR.glob("checkpoint_*.jsonl")) if CHECKPOINT_DIR.exists() else []
+    if _existing_cps:
+        st.warning(f"⚠️ {len(_existing_cps)} unfinished checkpoint(s) found.")
+        col_res, col_dis = st.columns(2)
+        with col_res:
+            if st.button("▶ Resume last", key="resume_cp_btn", use_container_width=True):
+                st.session_state["resume_checkpoint"] = str(max(_existing_cps, key=lambda p: p.stat().st_mtime))
+                st.rerun()
+        with col_dis:
+            if st.button("🗑 Discard", key="discard_cp_btn", use_container_width=True):
+                for _cp in _existing_cps:
+                    _cp.unlink(missing_ok=True)
+                st.rerun()
 
 
 # ============================== HEADER / OVERVIEW ============================
-# Title
 st.markdown(
     """
     <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
@@ -1270,47 +1729,119 @@ st.markdown(
     <div style="text-align:center; margin-top:-40px;">
         <h1 style="
             font-family: 'Dancing Script', cursive;
-            font-size:4rem;
-            font-weight:800;
+            font-size:5.5rem;
+            font-weight:900;
             margin-bottom:0.2rem;
-            letter-spacing:-0.10em;
+            letter-spacing:-0.06em;
+            -webkit-text-stroke: 0.5px rgba(0,0,0,0.08);
+            text-shadow: 0 2px 12px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10);
         ">
-            <span style="color:#ff6b6b;">R</span>
-            <span style="color:#f97316;">A</span>
-            <span style="color:#facc15;">G</span>
-            <span style="color:#22c55e;">V</span>
-            <span style="color:#0ea5e9;">u</span>
-            <span style="color:#a855f7;">e</span>
+            <span style="color:#e63946;">R</span>
+            <span style="color:#f4840a;">A</span>
+            <span style="color:#d4a017;">G</span>
+            <span style="color:#16a34a;">V</span>
+            <span style="color:#0284c7;">u</span>
+            <span style="color:#9333ea;">e</span>
         </h1>
-        <p style="
-            font-size:1.5rem;
-            color: var(--muted);
-            margin-top:0;
-            font-style: italic;
-        ">
-            Explainable and Reference-free RAG evaluation
+        <p style="font-size:1.5rem; color:var(--muted); margin-top:0; font-style:italic;">
+            Explainable &amp; Reference-Free RAG Evaluation
         </p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-# Intro cards
+# ── Feature ticker ────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+    .ticker-wrap {
+        overflow: hidden;
+        background: var(--card);
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
+        padding: 0.45rem 0;
+        margin: 0.6rem 0 1.2rem 0;
+    }
+    .ticker-track {
+        display: flex;
+        gap: 0;
+        width: max-content;
+        animation: ticker-scroll 40s linear infinite;
+    }
+    .ticker-wrap:hover .ticker-track { animation-play-state: paused; }
+    @keyframes ticker-scroll {
+        0%   { transform: translateX(0); }
+        100% { transform: translateX(-50%); }
+    }
+    .ticker-item {
+        white-space: nowrap;
+        padding: 0 1.6rem;
+        font-size: 0.82rem;
+        color: var(--muted);
+        border-right: 1px solid var(--card-border);
+    }
+    .ticker-item span { color: var(--text); font-weight: 600; }
+    </style>
+
+    <div class="ticker-wrap">
+      <div class="ticker-track">
+        <div class="ticker-item">🔍 <span>22 reference-free metrics</span></div>
+        <div class="ticker-item">🤖 <span>Manual &amp; Agentic modes</span></div>
+        <div class="ticker-item">⚖️ <span>OpenAI + Anthropic judge backends</span></div>
+        <div class="ticker-item">📊 <span>Cross-model calibration</span></div>
+        <div class="ticker-item">📈 <span>Longitudinal tracking &amp; regression detection</span></div>
+        <div class="ticker-item">🧠 <span>Your RAG Advisor — AI research partner</span></div>
+        <div class="ticker-item">🔬 <span>Hypothesis testing &amp; guided diagnosis</span></div>
+        <div class="ticker-item">📎 <span>Upload architecture diagrams for analysis</span></div>
+        <div class="ticker-item">🗂 <span>Multi-profile architecture history</span></div>
+        <div class="ticker-item">🚀 <span>Python API · CLI · FastAPI · Streamlit UI</span></div>
+        <div class="ticker-item">📄 <span>JSON · CSV · Markdown · HTML export</span></div>
+        <div class="ticker-item">🏆 <span>Accepted — EACL 2026 Demo Track</span></div>
+        <!-- duplicate for seamless loop -->
+        <div class="ticker-item">🔍 <span>22 reference-free metrics</span></div>
+        <div class="ticker-item">🤖 <span>Manual &amp; Agentic modes</span></div>
+        <div class="ticker-item">⚖️ <span>OpenAI + Anthropic judge backends</span></div>
+        <div class="ticker-item">📊 <span>Cross-model calibration</span></div>
+        <div class="ticker-item">📈 <span>Longitudinal tracking &amp; regression detection</span></div>
+        <div class="ticker-item">🧠 <span>Your RAG Advisor — AI research partner</span></div>
+        <div class="ticker-item">🔬 <span>Hypothesis testing &amp; guided diagnosis</span></div>
+        <div class="ticker-item">📎 <span>Upload architecture diagrams for analysis</span></div>
+        <div class="ticker-item">🗂 <span>Multi-profile architecture history</span></div>
+        <div class="ticker-item">🚀 <span>Python API · CLI · FastAPI · Streamlit UI</span></div>
+        <div class="ticker-item">📄 <span>JSON · CSV · Markdown · HTML export</span></div>
+        <div class="ticker-item">🏆 <span>Accepted — EACL 2026 Demo Track</span></div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ── Intro cards ───────────────────────────────────────────────────────────────
 c1, c2 = st.columns([1, 1])
 with c1:
     st.markdown(
         """
 <div class="card">
   <h3>Introduction</h3>
-   <p>
-    <strong>RAGVue</strong> is a lightweight, production-friendly dashboard to evaluate
-    Retrieval-Augmented Generation systems. <p>
-    <p>
-    It supports two modes:
-    <span class="chip">Manual</span> where you select metrics, and
-    <span class="chip">Agentic</span> where an orchestrator auto-selects relevant metrics and synthesizes overall scores.
+  <p>
+    <strong>RAGVue</strong> is a diagnostic evaluation framework for
+    Retrieval-Augmented Generation (RAG) systems — built for researchers and engineers
+    who need more than a single score.
   </p>
-  <p class="muted">Designed for fast demos and reproducible experiments for the EACL Demo Track.</p>
+  <p>
+    It provides <strong>interpretable diagnostics</strong> across retrieval quality,
+    answer faithfulness, and grounding, helping you pinpoint <em>why</em> a RAG output
+    failed — retrieval miss, hallucination, or generation error.
+  </p>
+  <p>
+    Two evaluation modes:
+    <span class="chip">Manual</span> — pick metrics yourself, and
+    <span class="chip">Agentic</span> — auto-selects metrics and synthesizes overall scores.
+    Runs via <span class="chip">Streamlit UI</span> <span class="chip">Python API</span>
+    <span class="chip">CLI</span> <span class="chip">FastAPI</span>.
+  </p>
+  <p class="muted">Accepted · EACL 2026 Demo Track</p>
 </div>
         """,
         unsafe_allow_html=True,
@@ -1319,12 +1850,22 @@ with c2:
     st.markdown(
         """
 <div class="card">
-  <h3 style="margin-top:0;">Key At-a-Glance</h3>
+  <h3 style="margin-top:0;">At a Glance</h3>
   <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:0.5rem;">
-    <div class="chip">One-click run</div>
-    <div class="chip">Per-item drill-down</div>
-    <div class="chip">CSV/MD/HTML export</div>
+    <div class="chip">22 reference-free metrics</div>
+    <div class="chip">6 core evaluation metrics</div>
+    <div class="chip">6 calibration metrics</div>
+    <div class="chip">6 failure-mode metrics</div>
+    <div class="chip">4 local metrics (no API)</div>
+    <div class="chip">OpenAI + Claude backends</div>
+    <div class="chip">Cross-model calibration</div>
     <div class="chip">Agentic orchestration</div>
+    <div class="chip">Longitudinal tracking</div>
+    <div class="chip">Report comparison</div>
+    <div class="chip">Your RAG Advisor</div>
+    <div class="chip">Multi-profile history</div>
+    <div class="chip">Vision file upload</div>
+    <div class="chip">JSON · CSV · MD · HTML export</div>
   </div>
 </div>
         """,
@@ -1333,48 +1874,81 @@ with c2:
 
 st.markdown("")
 
-# Feature & Benefits section
+# ── Key Features & Benefits ───────────────────────────────────────────────────
 fc1, fc2 = st.columns(2)
 with fc1:
-    st.subheader("✨ Key Features")
+    st.markdown('<h3 class="tab-heading">✨ Key Features</h3>', unsafe_allow_html=True)
     st.markdown(
         """
-- **Manual & Agentic modes**: Pick metrics yourself or let the orchestrator decide.
-- **Per-item drill-down**: Questions, answers, contexts, aggregate score, and metric-wise explanations.
-- **Instant exports**: Download **JSON**, **CSV**, **Markdown**, or **HTML** reports for papers & repos.
-- **Session resilience**: Auto-saves the last 10 reports — view and reload any of them in the **Reports** tab.
+- **22 reference-free metrics** — 6 core, 6 calibration, 6 complex failure-mode, 4 local (no API cost)
+- **Dual judge backends** — OpenAI (default) or Anthropic Claude, switchable per run or per metric
+- **Cross-model calibration** — measures judge agreement across 7 model/temperature combinations including Claude
+- **Manual & Agentic modes** — pick metrics yourself or let the orchestrator auto-select and synthesize
+- **Report history & comparison** — last 10 reports saved; side-by-side delta view (B − A)
+- **Longitudinal tracking** — persistent run registry, metric trend charts, automatic regression detection
+- **Your RAG Advisor** — persistent AI research partner with architecture profiles, hypothesis testing, before/after analysis, guided diagnosis, and file/diagram upload
+- **Multi-interface** — Python API, CLI (`ragvue-cli`, `ragvue-py`), FastAPI REST, Streamlit UI
         """
     )
 
 with fc2:
-    st.subheader("🎯 How It Benefits Users")
+    st.markdown('<h3 class="tab-heading">🎯 How It Benefits You</h3>', unsafe_allow_html=True)
     st.markdown(
         """
-    - **Researchers**: Get *explainable* metrics, not black-box scores. Compare RAG variants fast.
-    - **Engineers**: Plug-and-play. Fits straight into existing pipelines and API keys.
-    - **Demo audiences**: Clear visuals, expandable reasoning, easy exports.
-    - **Reviewers**: Transparent, reproducible results with concise explanations.
+- **Researchers** — explainable metrics, not black-box scores; compare RAG variants across runs; use the RAG Advisor as a research partner to form and test hypotheses without leaving the dashboard
+- **Engineers** — plug-and-play API and CLI that fit into existing pipelines; parallel metric execution keeps evaluation fast even at scale
+- **Paper authors** — reproducible, citable evaluation with structured per-item reasoning; export directly to Markdown or HTML for appendices
+- **Teams iterating on RAG** — longitudinal tracking catches regressions before they reach production; before/after comparison explains what changed and why
+- **Non-technical users** — Streamlit UI requires no code; upload data, run evaluation, get results and architectural advice in one place
         """
     )
 
 st.markdown("---")
 
 # Tabs
-tab_overview, tab_eval, tab_reports, tab_longitudinal = st.tabs(["**Overview**", "**Evaluate**", "**Reports**", "**Longitudinal**"])
+tab_overview, tab_eval, tab_reports, tab_longitudinal, tab_advisor = st.tabs(["**Overview**", "**Evaluate**", "**Reports**", "**Longitudinal**", "**Your RAG Advisor**"])
 
 # ============================== OVERVIEW TAB ================================
 with tab_overview:
-    st.markdown(
-        """
-**How to use:**
-1. Upload an `items.jsonl` in the sidebar.
-2. Choose **Manual** or **Agentic** mode of your choice.
-3. (Optional) Adjust **Min item score** filter.
-4. Click **Run Evaluation**.
-5. Go to **Evaluate** → view **Summary** and **Item Results**.
-6. **Export** results for your paper or repo.
-        """
-    )
+    st.markdown('<h3 class="tab-heading">📖 How to use RAGVue</h3>', unsafe_allow_html=True)
+    _ov1, _ov2 = st.columns(2)
+    with _ov1:
+        st.markdown(
+            """
+**Evaluate your RAG pipeline:**
+1. Upload an `items.jsonl` in the sidebar *(question · answer · contexts)*
+2. Choose **Manual** mode *(pick metrics)* or **Agentic** mode *(auto-select)*
+3. Select your judge — **OpenAI** or **Claude** — from the sidebar
+4. Click **Run Evaluation**
+5. View **Summary** scores and **per-item drill-down** in the Evaluate tab
+6. Export as **JSON · CSV · Markdown · HTML** for papers or repos
+
+**Track progress over time:**
+- Every run is saved to **Report History** (last 10) and the **Longitudinal** registry
+- Use **Report Comparison** to inspect metric deltas between two runs
+- **Regression Detection** automatically flags drops above your threshold
+            """
+        )
+    with _ov2:
+        st.markdown(
+            """
+**Get architectural advice:**
+1. Open **Your RAG Advisor** → **My Profile** tab
+2. Save your pipeline configuration *(retriever, chunk size, LLM, …)*
+3. Switch to the **Chat** tab — your advisor already knows your setup
+4. Share a saved report with one click to discuss specific scores
+5. Use **Analysis Tools** for structured workflows:
+   - **Before/After** — compare two runs, get causal explanation
+   - **Hypothesis Testing** — predict metric impact before running
+   - **Guided Diagnosis** — step-by-step Retrieval → Grounding → Generation walkthrough
+6. Upload architecture diagrams or methodology PDFs for visual feedback
+
+**Input format:**
+```json
+{"question": "...", "answer": "...", "contexts": ["chunk1", "chunk2"]}
+```
+            """
+        )
 
 # ============================== EVALUATION TAB ==============================
 
@@ -1399,7 +1973,12 @@ with tab_eval:
         start_time = time.perf_counter()
         status_box.info("Starting evaluation... this may take a while depending on your dataset and API speed.")
         # 🔐 Make sure we actually have a key before doing anything
-        if not get_api_key():
+        _active_provider = os.getenv("RAGVUE_JUDGE_PROVIDER", "openai").lower()
+        if _active_provider == "anthropic":
+            if not os.getenv("ANTHROPIC_API_KEY"):
+                st.error("No Anthropic API key found. Paste it in the left sidebar and click **'Use in this session'** first.")
+                st.stop()
+        elif not get_api_key():
             st.error("No API key found. Paste it in the left sidebar and click **'Use in this session'** first.")
             st.stop()
         try:
@@ -1413,18 +1992,40 @@ with tab_eval:
             if max_items > 0:
                 items = items[:max_items]
 
+            # Apply sampling
+            if enable_sampling and sample_size > 0 and len(items) > sample_size:
+                import random as _random
+                _orig_count = len(items)
+                if sample_method == "Random":
+                    items = _random.sample(items, sample_size)
+                else:
+                    items = items[:sample_size]
+                st.info(f"🎲 Sampled {len(items)} items from {_orig_count} total ({sample_method}).")
+
             if not items:
                 st.error("No items available. Upload a `.jsonl` first from the sidebar.")
             else:
                 status_box.info(f"Running evaluation on {len(items)} item(s)...")
 
+                # Checkpoint setup
+                _run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                _cp_path = _checkpoint_path(_run_id)
+                _resume_cp = st.session_state.pop("resume_checkpoint", None)
+                _already_done: list = []
+                _start_idx = 0
+                if _resume_cp and Path(_resume_cp).exists():
+                    _already_done = _load_checkpoint(Path(_resume_cp))
+                    _cp_path = Path(_resume_cp)
+                    _start_idx = len(_already_done)
+                    status_box.info(f"Resuming from checkpoint — {_start_idx} items already done.")
+
                 if mode.startswith("Manual") or mode == "Retrieval Only":
                     if not selected_metrics:
                         st.warning("No metrics selected; nothing to run.")
                     else:
-                        results = []
+                        results = list(_already_done)
 
-                        for i, item in enumerate(items, start=1):
+                        for i, item in enumerate(items[_start_idx:], start=_start_idx + 1):
                             progress_bar.progress(i / len(items))
                             progress_text.text(f"Evaluating item {i} of {len(items)}...")
                             t0 = time.perf_counter()
@@ -1435,6 +2036,8 @@ with tab_eval:
                                 res = single_report["results"][0]
                                 res["eval_time_sec"] = round(elapsed, 2)
                                 results.append(res)
+                                _save_checkpoint(_cp_path, res)
+                        _cp_path.unlink(missing_ok=True)
                         summary = compute_summary_from_results(results)
                         rb = ReportBuilder({"results": results})
                         report = {"results": results, "summary": summary}
@@ -1452,8 +2055,8 @@ with tab_eval:
                         render_report(report, agentic_mode=False, min_item_score=min_item_score, key_prefix="eval")
                 else:
                     orch = AgenticOrchestrator()
-                    results = []
-                    for i, item in enumerate(items, start=1):
+                    results = list(_already_done)
+                    for i, item in enumerate(items[_start_idx:], start=_start_idx + 1):
                         progress_bar.progress(i / len(items))
                         progress_text.text(f"Evaluating item {i} of {len(items)}...")
                         t0 = time.perf_counter()
@@ -1461,11 +2064,13 @@ with tab_eval:
                         elapsed = time.perf_counter() - t0
                         if single_report.get("results"):
                             res = single_report["results"][0]
-                            res["eval_time_sec"] = round(elapsed,2)
+                            res["eval_time_sec"] = round(elapsed, 2)
                             results.append(res)
+                            _save_checkpoint(_cp_path, res)
                     summary = compute_summary_from_results(results)
                     rb = ReportBuilder({"results": results})
 
+                    _cp_path.unlink(missing_ok=True)
                     report = {"results": results, "summary": summary}
                     st.session_state["last_report"] = report
                     _label = report_name.strip() if report_name.strip() else (upl.name if upl else "unknown")
@@ -1503,7 +2108,7 @@ with tab_eval:
 
 # ============================== REPORTS TAB ==================================
 with tab_reports:
-    st.subheader("📋 Report History")
+    st.markdown('<h3 class="tab-heading">📋 Report History</h3>', unsafe_allow_html=True)
     if not REPORTS_PATH.exists():
         st.info("No saved reports yet. Run an evaluation first.")
     else:
@@ -1536,7 +2141,7 @@ with tab_reports:
                         rep_a = history[idx_a]
                         rep_b = history[idx_b]
 
-                        st.markdown("#### Metric Comparison")
+                        st.markdown('<h4 class="tab-heading">📊 Metric Comparison</h4>', unsafe_allow_html=True)
                         summary_a = rep_a["report"].get("summary", {})
                         summary_b = rep_b["report"].get("summary", {})
                         all_metrics = sorted(set(summary_a) | set(summary_b))
@@ -1600,7 +2205,7 @@ with tab_reports:
 
 # ============================== LONGITUDINAL TAB =============================
 with tab_longitudinal:
-    st.subheader("📈 Longitudinal Tracking")
+    st.markdown('<h3 class="tab-heading">📈 Longitudinal Tracking</h3>', unsafe_allow_html=True)
     if not RUN_REGISTRY_PATH.exists():
         st.info("No runs recorded yet. Run an evaluation first.")
     else:
@@ -1613,7 +2218,8 @@ with tab_longitudinal:
                 import pandas as pd
 
                 # ── 1. Run registry table ─────────────────────────────────
-                st.markdown("### Run Registry")
+                st.markdown("### 🗃 Run Registry")
+                reg_cols = ["#", "Timestamp", "Label", "Version", "Notes"]
                 reg_rows = [
                     {
                         "#": i + 1,
@@ -1624,10 +2230,39 @@ with tab_longitudinal:
                     }
                     for i, e in enumerate(registry)
                 ]
-                st.dataframe(reg_rows, use_container_width=True)
+                _ths = "".join(f"<th>{c}</th>" for c in reg_cols)
+                _rows_html = "".join(
+                    "<tr>" + "".join(f"<td>{r.get(c, '')}</td>" for c in reg_cols) + "</tr>"
+                    for r in reg_rows
+                )
+                st.markdown(
+                    f'<div><table class="themed-table"><thead><tr>{_ths}</tr></thead>'
+                    f'<tbody>{_rows_html}</tbody></table></div>',
+                    unsafe_allow_html=True,
+                )
+
+                col_del_run, col_del_all_runs, _ = st.columns([2, 2, 4])
+                with col_del_run:
+                    run_labels = [f"#{i+1} — {e['timestamp']} · {e['label']}" for i, e in enumerate(registry)]
+                    del_choice = st.selectbox("Select run to delete:", run_labels, key="lng_del_select")
+                    if st.button("🗑 Delete this run", key="lng_del_one", use_container_width=True):
+                        del_idx = run_labels.index(del_choice)
+                        registry.pop(del_idx)
+                        with open(RUN_REGISTRY_PATH, "w", encoding="utf-8") as f:
+                            json.dump(registry, f, ensure_ascii=False, indent=2)
+                        st.success("Run deleted.")
+                        st.rerun()
+                with col_del_all_runs:
+                    st.write("")
+                    st.write("")
+                    if st.button("🗑 Delete all runs", key="lng_del_all", use_container_width=True):
+                        with open(RUN_REGISTRY_PATH, "w", encoding="utf-8") as f:
+                            json.dump([], f)
+                        st.success("All runs deleted.")
+                        st.rerun()
 
                 # ── 2. Trend line chart ───────────────────────────────────
-                st.markdown("### Metric Trends")
+                st.markdown("### 📉 Metric Trends")
                 all_metrics = sorted({k for e in registry for k in e.get("summary", {}).keys()})
                 if all_metrics:
                     selected_trend = st.multiselect(
@@ -1643,14 +2278,63 @@ with tab_longitudinal:
                             for m in selected_trend:
                                 row[m] = e.get("summary", {}).get(m)
                             chart_rows.append(row)
-                        df_chart = pd.DataFrame(chart_rows).set_index("Run")
-                        st.line_chart(df_chart)
+                        df_chart = pd.DataFrame(chart_rows)
+
+                        _tc = THEMES[st.session_state.get("theme", "Light")]
+                        import plotly.graph_objects as go
+                        _accent_colors = [
+                            "#818cf8", "#34d399", "#f97316", "#f43f5e",
+                            "#facc15", "#38bdf8", "#a78bfa", "#4ade80",
+                        ]
+                        fig = go.Figure()
+                        for idx_m, metric in enumerate(selected_trend):
+                            fig.add_trace(go.Scatter(
+                                x=df_chart["Run"],
+                                y=df_chart[metric],
+                                mode="lines+markers",
+                                name=metric,
+                                line=dict(
+                                    color=_accent_colors[idx_m % len(_accent_colors)],
+                                    width=2,
+                                ),
+                                marker=dict(size=7),
+                            ))
+                        fig.update_layout(
+                            paper_bgcolor=_tc["--bg"],
+                            plot_bgcolor=_tc["--card"],
+                            font=dict(
+                                color=_tc["--text"],
+                                family="Plus Jakarta Sans, system-ui, sans-serif",
+                            ),
+                            xaxis=dict(
+                                gridcolor=_tc["--card-border"],
+                                linecolor=_tc["--card-border"],
+                                tickfont=dict(color=_tc["--muted"]),
+                                tickangle=-30,
+                            ),
+                            yaxis=dict(
+                                gridcolor=_tc["--card-border"],
+                                linecolor=_tc["--card-border"],
+                                tickfont=dict(color=_tc["--muted"]),
+                                range=[0, 1],
+                                tickformat=".2f",
+                            ),
+                            legend=dict(
+                                bgcolor=_tc["--bg-alt"],
+                                bordercolor=_tc["--card-border"],
+                                borderwidth=1,
+                                font=dict(color=_tc["--text"]),
+                            ),
+                            margin=dict(l=50, r=20, t=20, b=70),
+                            hovermode="x unified",
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("No summary metrics found in registry.")
 
                 # ── 3. Regression detection ───────────────────────────────
                 if len(registry) >= 2:
-                    st.markdown("### Regression Detection")
+                    st.markdown('<h3 class="tab-heading">🔍 Regression Detection</h3>', unsafe_allow_html=True)
                     st.caption("Comparing the two most recent runs.")
                     threshold = st.slider(
                         "Flag drops larger than:", 0.01, 0.20, 0.05, 0.01, key="reg_threshold"
@@ -1676,6 +2360,551 @@ with tab_longitudinal:
                         st.info("No overlapping metrics between the last two runs.")
         except Exception as e:
             st.error(f"Could not load run registry: {e}")
+
+# ============================== YOUR RAG ADVISOR TAB =========================
+with tab_advisor:
+    st.markdown('<h3 class="tab-heading">🤖 Your RAG Advisor</h3>', unsafe_allow_html=True)
+    st.markdown(
+        "<p style='text-align:center; color:var(--muted); font-size:0.82rem; font-style:italic; margin-bottom:0.8rem;'>"
+        "Research partner, not ground truth — suggestions are hypotheses to validate empirically, not guaranteed fixes."
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Shared state (needed across all sub-tabs) ─────────────────────────────
+    if "advisor_messages" not in st.session_state:
+        st.session_state.advisor_messages = _load_advisor_history()
+    _adv_store   = _load_profile_store()
+    _adv_profile = _active_profile(_adv_store)
+    _adv_system_prompt = _build_advisor_system_prompt(_adv_profile)
+
+    if not st.session_state.advisor_messages:
+        _profile_note = (
+            " I already know your architecture from your saved profile."
+            if _adv_profile else
+            " To get started: describe your RAG setup, or fill in your **Architecture Profile** (tab above)."
+        )
+        st.session_state.advisor_messages = [{
+            "role": "assistant",
+            "content": "Hi! I'm **Your RAG Advisor** — a research partner for diagnosing and improving your RAG pipeline." + _profile_note,
+        }]
+        _save_advisor_history(st.session_state.advisor_messages)
+
+    # ── Sub-tabs ──────────────────────────────────────────────────────────────
+    _atab_chat, _atab_profile, _atab_tools = st.tabs(["💬 Chat", "🗂 My Profile", "🔬 Analysis Tools"])
+
+    # ═══════════════════════════ CHAT SUB-TAB ════════════════════════════════
+    with _atab_chat:
+
+        # ── Auto-inject latest eval results banner ────────────────────────────
+        if "advisor_last_offered_ts" not in st.session_state:
+            st.session_state.advisor_last_offered_ts = ""
+        _newest_report = None
+        if REPORTS_PATH.exists():
+            try:
+                with open(REPORTS_PATH, "r", encoding="utf-8") as _nf:
+                    _all_saved = json.load(_nf)
+                if _all_saved:
+                    _newest_report = _all_saved[0]
+            except Exception:
+                pass
+        if _newest_report and _newest_report.get("timestamp", "") != st.session_state.advisor_last_offered_ts:
+            _nr_label = _newest_report.get("label", "Untitled")
+            _nr_ts    = _newest_report.get("timestamp", "")
+            _bnr_c1, _bnr_c2, _bnr_c3 = st.columns([7, 2.5, 0.5])
+            with _bnr_c1:
+                st.info(f"**New evaluation ready:** {_nr_label} · {_nr_ts[:16]} — share with your advisor?")
+            with _bnr_c2:
+                if st.button("Share with advisor", key="auto_share_btn", use_container_width=True):
+                    _nr_sum = compute_summary_from_results(_newest_report.get("report", {}).get("results", []))
+                    if _nr_sum:
+                        _auto_inject = (
+                            f"Here are my latest evaluation results from **{_nr_label}** ({_nr_ts}):\n"
+                            + "\n".join(f"  - {k}: {v:.3f}" for k, v in sorted(_nr_sum.items()))
+                        )
+                        _last_msg = st.session_state.advisor_messages[-1] if st.session_state.advisor_messages else {}
+                        if _last_msg.get("content") != _auto_inject:
+                            st.session_state.advisor_messages.append({"role": "user", "content": _auto_inject})
+                            _save_advisor_history(st.session_state.advisor_messages)
+                    st.session_state.advisor_last_offered_ts = _nr_ts
+                    st.rerun()
+            with _bnr_c3:
+                if st.button("✕", key="auto_share_dismiss", use_container_width=True):
+                    st.session_state.advisor_last_offered_ts = _nr_ts
+                    st.rerun()
+
+        # Thin controls bar
+        _cc1, _cc2, _cc3, _cc4 = st.columns([3, 3, 2, 2])
+        with _cc1:
+            _ADV_MODEL_OPTIONS = [
+                "gpt-4o-mini  ·  OpenAI  ·  fast",
+                "gpt-4o  ·  OpenAI  ·  capable",
+                "gpt-3.5-turbo  ·  OpenAI  ·  budget",
+                "claude-haiku-4-5-20251001  ·  Anthropic  ·  fast",
+                "claude-sonnet-4-6  ·  Anthropic  ·  balanced",
+                "claude-opus-4-6  ·  Anthropic  ·  powerful",
+            ]
+            _adv_model_choice = st.selectbox(
+                "Model:", _ADV_MODEL_OPTIONS,
+                key="advisor_model_choice", label_visibility="collapsed",
+            )
+            _adv_model    = _adv_model_choice.split("  ·  ")[0].strip()
+            _adv_provider = "anthropic" if "Anthropic" in _adv_model_choice else "openai"
+        with _cc2:
+            _adv_report_opts = ["📋 Share a saved report…"]
+            _adv_reports: list = []
+            if REPORTS_PATH.exists():
+                try:
+                    with open(REPORTS_PATH, "r", encoding="utf-8") as _f:
+                        _adv_reports = json.load(_f)
+                    _adv_report_opts += [f"{e['timestamp']} · {e['label']}" for e in _adv_reports]
+                except Exception:
+                    pass
+            _adv_report_sel = st.selectbox(
+                "Report:", _adv_report_opts, key="advisor_report_sel", label_visibility="collapsed"
+            )
+            if _adv_report_sel != "📋 Share a saved report…":
+                _sel_idx   = _adv_report_opts.index(_adv_report_sel) - 1
+                _sel_entry = _adv_reports[_sel_idx]
+                _sel_sum   = compute_summary_from_results(_sel_entry.get("report", {}).get("results", []))
+                if _sel_sum:
+                    _inject_text = (
+                        f"Here are my evaluation results from **{_sel_entry['label']}** ({_sel_entry['timestamp']}):\n"
+                        + "\n".join(f"  - {k}: {v:.3f}" for k, v in sorted(_sel_sum.items()))
+                    )
+                    _last_adv = st.session_state.advisor_messages[-1] if st.session_state.advisor_messages else {}
+                    if _last_adv.get("content") != _inject_text:
+                        st.session_state.advisor_messages.append({"role": "user", "content": _inject_text})
+                        _save_advisor_history(st.session_state.advisor_messages)
+                        st.rerun()
+        with _cc3:
+            if len(st.session_state.advisor_messages) > 1:
+                _export_md = "\n\n".join(
+                    f"**{'You' if m['role'] == 'user' else 'Your RAG Advisor'}:** {m['content']}"
+                    for m in st.session_state.advisor_messages
+                )
+                st.download_button(
+                    "⬇ Export", data=_export_md,
+                    file_name="rag_advisor_conversation.md", mime="text/markdown",
+                    key="advisor_export", use_container_width=True,
+                )
+        with _cc4:
+            if st.button("🗑 Clear", key="advisor_clear", use_container_width=True):
+                st.session_state.advisor_messages = []
+                _save_advisor_history([])
+                st.rerun()
+
+        st.markdown("")
+
+        # File upload (collapsed by default)
+        with st.expander("📎 Upload diagram or document", expanded=False):
+            _adv_upload_col, _adv_btn_col = st.columns([4, 2])
+            with _adv_upload_col:
+                _adv_file = st.file_uploader(
+                    "PNG / JPG / WEBP · PDF · TXT / MD",
+                    type=["png", "jpg", "jpeg", "webp", "pdf", "txt", "md"],
+                    key="advisor_file_upload", label_visibility="collapsed",
+                )
+            with _adv_btn_col:
+                _adv_file_prompt = st.text_input(
+                    "Question:", placeholder="What could be improved?",
+                    key="advisor_file_prompt", label_visibility="collapsed",
+                )
+                _adv_send_file = st.button("Send to advisor", key="advisor_send_file", use_container_width=True)
+
+        if _adv_send_file and _adv_file is not None:
+            import base64
+            _adv_fname     = _adv_file.name.lower()
+            _adv_file_bytes = _adv_file.read()
+            _file_question  = _adv_file_prompt.strip() or "Please review this and give feedback relevant to my RAG pipeline."
+
+            if _adv_fname.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                _media_map  = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
+                _media_type = _media_map.get(_adv_fname.rsplit(".", 1)[-1], "image/png")
+                _img_b64    = base64.b64encode(_adv_file_bytes).decode("utf-8")
+                st.session_state.advisor_messages.append({"role": "user", "content": f"📎 *Image: `{_adv_file.name}`*\n\n{_file_question}"})
+                with st.chat_message("user"):
+                    st.image(_adv_file_bytes, caption=_adv_file.name, use_column_width=True)
+                    st.markdown(_file_question)
+                _llm_msgs_v = [{"role": "system", "content": _adv_system_prompt}]
+                for _m in st.session_state.advisor_messages[:-1]:
+                    _llm_msgs_v.append({"role": _m["role"], "content": _m["content"]})
+                with st.chat_message("assistant"):
+                    with st.spinner("Analysing image…"):
+                        try:
+                            from ragvue.src.core.llm_judge import call_judge_vision, ensure_env
+                            ensure_env()
+                            _prev_p = os.environ.get("RAGVUE_JUDGE_PROVIDER")
+                            os.environ["RAGVUE_JUDGE_PROVIDER"] = _adv_provider
+                            try:
+                                _response = call_judge_vision(_llm_msgs_v, _img_b64, _media_type, _file_question, model=_adv_model, temperature=0.7)
+                            finally:
+                                if _prev_p is None: os.environ.pop("RAGVUE_JUDGE_PROVIDER", None)
+                                else: os.environ["RAGVUE_JUDGE_PROVIDER"] = _prev_p
+                        except Exception as _e:
+                            _response = f"Vision analysis failed. Error: `{_e}`"
+                    st.markdown(_response)
+                st.session_state.advisor_messages.append({"role": "assistant", "content": _response})
+                _save_advisor_history(st.session_state.advisor_messages)
+                st.rerun()
+
+            elif _adv_fname.endswith(".pdf"):
+                _pdf_text = ""
+                try:
+                    import pypdf, io as _io
+                    _pdf_text = "\n\n".join(p.extract_text() or "" for p in pypdf.PdfReader(_io.BytesIO(_adv_file_bytes)).pages).strip()
+                except ImportError:
+                    try:
+                        import PyPDF2, io as _io
+                        _pdf_text = "\n\n".join(p.extract_text() or "" for p in PyPDF2.PdfReader(_io.BytesIO(_adv_file_bytes)).pages).strip()
+                    except ImportError:
+                        pass
+                _inject = (
+                    f"📎 *Document: `{_adv_file.name}`*\n\n{_file_question}\n\n---\n{_pdf_text[:6000]}" if _pdf_text
+                    else f"I uploaded `{_adv_file.name}` but PDF text extraction is unavailable. Install `pypdf` or paste the text directly."
+                )
+                st.session_state.advisor_messages.append({"role": "user", "content": _inject})
+                _save_advisor_history(st.session_state.advisor_messages)
+                st.rerun()
+
+            else:
+                try: _txt = _adv_file_bytes.decode("utf-8")
+                except Exception: _txt = _adv_file_bytes.decode("latin-1", errors="replace")
+                st.session_state.advisor_messages.append({"role": "user", "content": f"📎 *Document: `{_adv_file.name}`*\n\n{_file_question}\n\n---\n{_txt[:6000]}"})
+                _save_advisor_history(st.session_state.advisor_messages)
+                st.rerun()
+
+        # Quick starters — only on first open
+        if len(st.session_state.advisor_messages) <= 1:
+            st.markdown("**Try asking:**")
+            _starters = [
+                "My faithfulness is low — could it be a chunking problem?",
+                "How do I choose between dense and sparse retrieval?",
+                "My context utilization score is low — what does that mean?",
+                "What chunk size would you recommend for technical documentation?",
+            ]
+            _sc1, _sc2 = st.columns(2)
+            for _i, _s in enumerate(_starters):
+                with (_sc1 if _i % 2 == 0 else _sc2):
+                    if st.button(_s, key=f"starter_{_i}", use_container_width=True):
+                        st.session_state.advisor_messages.append({"role": "user", "content": _s})
+                        _save_advisor_history(st.session_state.advisor_messages)
+                        st.rerun()
+            st.markdown("")
+
+        # Chat history
+        for _msg in st.session_state.advisor_messages:
+            with st.chat_message(_msg["role"]):
+                st.markdown(_msg["content"])
+
+        # Chat input
+        if _user_input := st.chat_input("Ask a question or describe your setup…", key="advisor_input"):
+            st.session_state.advisor_messages.append({"role": "user", "content": _user_input})
+            with st.chat_message("user"):
+                st.markdown(_user_input)
+            _llm_msgs = [{"role": "system", "content": _adv_system_prompt}]
+            for _m in st.session_state.advisor_messages:
+                _llm_msgs.append({"role": _m["role"], "content": _m["content"]})
+            with st.chat_message("assistant"):
+                try:
+                    from ragvue.src.core.llm_judge import call_judge_text_stream, ensure_env
+                    ensure_env()
+                    _prev_p = os.environ.get("RAGVUE_JUDGE_PROVIDER")
+                    os.environ["RAGVUE_JUDGE_PROVIDER"] = _adv_provider
+                    def _safe_stream(_gen):
+                        try:
+                            yield from _gen
+                        except Exception as _se:
+                            yield f"\n\n⚠️ Stream interrupted: `{_se}`"
+                    try:
+                        _response = st.write_stream(_safe_stream(
+                            call_judge_text_stream(_llm_msgs, model=_adv_model, temperature=0.7)
+                        ))
+                    finally:
+                        if _prev_p is None: os.environ.pop("RAGVUE_JUDGE_PROVIDER", None)
+                        else: os.environ["RAGVUE_JUDGE_PROVIDER"] = _prev_p
+                except Exception as _e:
+                    _response = f"Sorry, I couldn't reach the LLM. Error: `{_e}`\n\nMake sure your API key is set in the sidebar."
+                    st.markdown(_response)
+            st.session_state.advisor_messages.append({"role": "assistant", "content": _response})
+            _save_advisor_history(st.session_state.advisor_messages)
+
+    # ═══════════════════════════ PROFILE SUB-TAB ═════════════════════════════
+    with _atab_profile:
+        st.markdown('<h4 class="tab-heading">🗂 My Architecture Profiles</h4>', unsafe_allow_html=True)
+        st.caption(
+            "Save one profile per pipeline configuration. Set one as **active** — "
+            "Your RAG Advisor uses it automatically in every conversation."
+        )
+
+        _pf_profiles  = _adv_store.get("profiles", [])
+        _pf_active    = _adv_store.get("active", -1)
+
+        # ── Saved profiles list ───────────────────────────────────────────────
+        if "pf_edit_idx" not in st.session_state:
+            st.session_state.pf_edit_idx = -1
+
+        if _pf_profiles:
+            st.markdown("**Saved profiles:**")
+            for _pi, _pp in enumerate(_pf_profiles):
+                _is_active = (_pi == _pf_active)
+                _pc1, _pc2, _pc3, _pc4 = st.columns([5, 2, 1.5, 1.5])
+                with _pc1:
+                    _badge = " ✅ active" if _is_active else ""
+                    _saved = f"  ·  saved {_pp.get('saved_at', '')[:10]}" if _pp.get("saved_at") else ""
+                    st.markdown(f"**{_pp.get('name', f'Profile {_pi+1}')}**{_badge}{_saved}")
+                    _summary_parts = [
+                        _pp.get("retriever"), _pp.get("generation_llm"),
+                        (_pp.get("chunk_size") and f"chunk={_pp['chunk_size']}"),
+                        (_pp.get("top_k") and f"k={_pp['top_k']}"),
+                    ]
+                    st.caption("  ·  ".join(p for p in _summary_parts if p))
+                with _pc2:
+                    if not _is_active:
+                        if st.button("Set active", key=f"pf_activate_{_pi}", use_container_width=True):
+                            _adv_store["active"] = _pi
+                            _save_profile_store(_adv_store)
+                            st.success(f"**{_pp.get('name', f'Profile {_pi+1}')}** is now active.")
+                            st.rerun()
+                    else:
+                        st.markdown("<div style='padding:6px 0; color:var(--muted)'>Active</div>", unsafe_allow_html=True)
+                with _pc3:
+                    if st.button("✏️ Edit", key=f"pf_edit_{_pi}", use_container_width=True):
+                        st.session_state.pf_edit_idx = _pi
+                        st.rerun()
+                with _pc4:
+                    if st.button("🗑 Delete", key=f"pf_delete_{_pi}", use_container_width=True):
+                        _pf_profiles.pop(_pi)
+                        _adv_store["profiles"] = _pf_profiles
+                        if _pf_active >= len(_pf_profiles):
+                            _adv_store["active"] = len(_pf_profiles) - 1
+                        elif _pf_active == _pi:
+                            _adv_store["active"] = -1
+                        if st.session_state.pf_edit_idx == _pi:
+                            st.session_state.pf_edit_idx = -1
+                        _save_profile_store(_adv_store)
+                        st.rerun()
+            st.markdown("---")
+
+        # ── Add / edit form ───────────────────────────────────────────────────
+        _edit_idx = st.session_state.pf_edit_idx
+        _edit_pf  = _pf_profiles[_edit_idx] if 0 <= _edit_idx < len(_pf_profiles) else {}
+        if _edit_pf:
+            _form_title = f"✏️ Editing: **{_edit_pf.get('name', f'Profile {_edit_idx + 1}')}**"
+        elif _pf_profiles:
+            _form_title = "➕ Add a new profile"
+        else:
+            _form_title = "Create your first profile"
+        st.markdown(_form_title)
+
+        _pf_name = st.text_input("Profile name *", value=_edit_pf.get("name", ""), placeholder="e.g. BM25 baseline · Dense 256-chunk · Hybrid v2", key="pf_name")
+        _pf_c1, _pf_c2 = st.columns(2)
+        with _pf_c1:
+            _pf_retriever  = st.text_input("Retriever type",      value=_edit_pf.get("retriever", ""),       placeholder="e.g. FAISS dense, BM25, hybrid",    key="pf_retriever")
+            _pf_chunk_size = st.text_input("Chunk size (tokens)", value=_edit_pf.get("chunk_size", ""),      placeholder="e.g. 512",                          key="pf_chunk_size")
+            _pf_overlap    = st.text_input("Chunk overlap",       value=_edit_pf.get("chunk_overlap", ""),   placeholder="e.g. 50 tokens / 10%",              key="pf_overlap")
+            _pf_k          = st.text_input("Top-k retrieved",     value=_edit_pf.get("top_k", ""),           placeholder="e.g. 5",                            key="pf_k")
+        with _pf_c2:
+            _pf_embedding  = st.text_input("Embedding model",     value=_edit_pf.get("embedding_model", ""), placeholder="e.g. text-embedding-3-small",       key="pf_embedding")
+            _pf_llm        = st.text_input("Generation LLM",      value=_edit_pf.get("generation_llm", ""),  placeholder="e.g. GPT-4o, LLaMA-3",              key="pf_llm")
+            _pf_framework  = st.text_input("Framework / stack",   value=_edit_pf.get("framework", ""),       placeholder="e.g. LlamaIndex, LangChain",        key="pf_framework")
+            _pf_domain     = st.text_input("Domain / use case",   value=_edit_pf.get("domain", ""),          placeholder="e.g. medical Q&A, legal documents", key="pf_domain")
+        _pf_notes = st.text_area("Additional notes", value=_edit_pf.get("notes", ""), placeholder="Reranker, prompt template, special constraints…", key="pf_notes", height=70)
+
+        _save_label = "💾 Update profile" if _edit_pf else "💾 Save & set active"
+        _save_col, _cancel_col = (st.columns([3, 1]) if _edit_pf else (st.columns([1])[0], None))
+        with _save_col:
+            _do_save = st.button(_save_label, key="pf_save", type="primary", use_container_width=True)
+        if _cancel_col:
+            with _cancel_col:
+                if st.button("Cancel", key="pf_cancel", use_container_width=True):
+                    st.session_state.pf_edit_idx = -1
+                    st.rerun()
+
+        if _do_save:
+            if not _pf_name.strip():
+                st.warning("Give this profile a name so you can tell them apart.")
+            else:
+                _new_pf = {
+                    "name": _pf_name.strip(),
+                    "retriever": _pf_retriever, "chunk_size": _pf_chunk_size,
+                    "chunk_overlap": _pf_overlap, "top_k": _pf_k,
+                    "embedding_model": _pf_embedding, "generation_llm": _pf_llm,
+                    "framework": _pf_framework, "domain": _pf_domain, "notes": _pf_notes,
+                    "saved_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                if 0 <= _edit_idx < len(_pf_profiles):
+                    _pf_profiles[_edit_idx] = _new_pf
+                    _adv_store["profiles"] = _pf_profiles
+                    _save_profile_store(_adv_store)
+                    st.session_state.pf_edit_idx = -1
+                    st.success(f"Profile **{_pf_name.strip()}** updated.")
+                else:
+                    _pf_profiles.append(_new_pf)
+                    _adv_store["profiles"] = _pf_profiles
+                    _adv_store["active"]   = len(_pf_profiles) - 1
+                    _save_profile_store(_adv_store)
+                    st.success(f"Profile **{_pf_name.strip()}** saved and set as active.")
+                st.rerun()
+
+    # ═══════════════════════════ ANALYSIS TOOLS SUB-TAB ══════════════════════
+    with _atab_tools:
+        st.markdown('<h4 class="tab-heading">🔬 Analysis Tools</h4>', unsafe_allow_html=True)
+        st.caption("Each tool sends a structured message to the Chat — switch to the Chat tab to see the response.")
+
+        # ── Before / After Comparison ─────────────────────────────────────────
+        st.markdown("**📊 Before / After Report Comparison**")
+        st.caption("Select two saved reports. Your advisor explains what changed and hypothesises why.")
+        _ba_report_opts = ["(select a report)"]
+        _ba_reports: list = []
+        if REPORTS_PATH.exists():
+            try:
+                with open(REPORTS_PATH, "r", encoding="utf-8") as _f:
+                    _ba_reports = json.load(_f)
+                _ba_report_opts += [f"{e['timestamp']} · {e['label']}" for e in _ba_reports]
+            except Exception:
+                pass
+        _ba_c1, _ba_c2 = st.columns(2)
+        with _ba_c1:
+            _ba_sel_a = st.selectbox("Report A (baseline):", _ba_report_opts, key="ba_sel_a")
+        with _ba_c2:
+            _ba_sel_b = st.selectbox("Report B (new run):",  _ba_report_opts, key="ba_sel_b")
+        if st.button("Send comparison to chat →", key="ba_compare", use_container_width=True):
+            if _ba_sel_a != "(select a report)" and _ba_sel_b != "(select a report)" and _ba_sel_a != _ba_sel_b:
+                _ba_idx_a  = _ba_report_opts.index(_ba_sel_a) - 1
+                _ba_idx_b  = _ba_report_opts.index(_ba_sel_b) - 1
+                _ba_sum_a  = compute_summary_from_results(_ba_reports[_ba_idx_a].get("report", {}).get("results", []))
+                _ba_sum_b  = compute_summary_from_results(_ba_reports[_ba_idx_b].get("report", {}).get("results", []))
+                _ba_lines  = []
+                for _k in sorted(set(_ba_sum_a) | set(_ba_sum_b)):
+                    _va, _vb = _ba_sum_a.get(_k), _ba_sum_b.get(_k)
+                    if _va is not None and _vb is not None:
+                        _d = _vb - _va
+                        _ba_lines.append(f"  - {_k}: {_va:.3f} → {_vb:.3f} ({'▲' if _d > 0.01 else '▼' if _d < -0.01 else '≈'}{_d:+.3f})")
+                    elif _vb is not None:
+                        _ba_lines.append(f"  - {_k}: (new) {_vb:.3f}")
+                st.session_state.advisor_messages.append({"role": "user", "content": (
+                    f"Comparing runs — A: **{_ba_reports[_ba_idx_a]['label']}** vs B: **{_ba_reports[_ba_idx_b]['label']}**\n\n"
+                    "Metric changes (B − A):\n" + "\n".join(_ba_lines) + "\n\n"
+                    "Based on my architecture, what likely caused these changes and what should I investigate?"
+                )})
+                _save_advisor_history(st.session_state.advisor_messages)
+                st.success("Sent to chat — switch to the **Chat** tab to see the response.")
+            else:
+                st.warning("Select two different reports.")
+
+        st.markdown("---")
+
+        # ── Hypothesis Testing ────────────────────────────────────────────────
+        st.markdown("**🔬 State a Hypothesis**")
+        st.caption("Describe a change you're planning. Your advisor predicts which metrics will improve — then validate with a new evaluation.")
+        _hyp_text = st.text_area(
+            "Your hypothesis:",
+            placeholder="e.g. I'm going to reduce chunk size from 512 to 256 tokens with 20% overlap.",
+            key="hyp_text", height=90,
+        )
+        if st.button("Send hypothesis to chat →", key="hyp_submit", use_container_width=True):
+            if _hyp_text.strip():
+                st.session_state.advisor_messages.append({"role": "user", "content": (
+                    f"**Hypothesis:** {_hyp_text.strip()}\n\n"
+                    "Which RAGVue metrics do you predict will improve or degrade, and why? "
+                    "I'll run the evaluation after this change and share the new results."
+                )})
+                _save_advisor_history(st.session_state.advisor_messages)
+                st.success("Sent to chat — switch to the **Chat** tab to see the response.")
+            else:
+                st.warning("Enter your hypothesis first.")
+
+        st.markdown("---")
+
+        # ── Failure Mode Scanner ──────────────────────────────────────────────
+        st.markdown("**🔴 Failure Mode Scanner**")
+        st.caption("Select a report. Your advisor identifies active failure modes, explains root causes, and prioritises the top 2 issues to fix.")
+        _fm_opts = ["(select a report)"]
+        _fm_reports: list = []
+        if REPORTS_PATH.exists():
+            try:
+                with open(REPORTS_PATH, "r", encoding="utf-8") as _fm_f:
+                    _fm_reports = json.load(_fm_f)
+                _fm_opts += [f"{e['timestamp']} · {e['label']}" for e in _fm_reports]
+            except Exception:
+                pass
+        _fm_sel = st.selectbox("Report for scanning:", _fm_opts, key="fm_sel", label_visibility="collapsed")
+        if st.button("Scan for failure modes →", key="fm_scan", use_container_width=True):
+            if _fm_sel != "(select a report)":
+                _fm_idx = _fm_opts.index(_fm_sel) - 1
+                _fm_sum = compute_summary_from_results(_fm_reports[_fm_idx].get("report", {}).get("results", []))
+                if _fm_sum:
+                    _fm_scores = "\n".join(f"  - {k}: {v:.3f}" for k, v in sorted(_fm_sum.items()))
+                    st.session_state.advisor_messages.append({"role": "user", "content": (
+                        f"**Failure Mode Scanner** — Report: **{_fm_reports[_fm_idx]['label']}**\n\n"
+                        f"Metric scores:\n{_fm_scores}\n\n"
+                        "Based on these scores, please:\n"
+                        "1. Identify which RAG failure modes are active (retrieval miss, context ignorance, hallucination, "
+                        "over-confidence, multi-hop gap, generation drift, or others)\n"
+                        "2. For each active failure mode, briefly explain what is likely happening in the pipeline\n"
+                        "3. Prioritise the top 2 most critical issues to fix first\n"
+                        "4. For each priority issue, suggest one concrete, testable intervention"
+                    )})
+                    _save_advisor_history(st.session_state.advisor_messages)
+                    st.success("Sent to chat — switch to the **Chat** tab to see the failure mode analysis.")
+                else:
+                    st.warning("No metric scores found in this report.")
+            else:
+                st.warning("Select a report first.")
+
+        st.markdown("---")
+
+        # ── Suggest Next Experiment ───────────────────────────────────────────
+        st.markdown("**🧪 Suggest Next Experiment**")
+        st.caption("Given your current scores, your advisor recommends the single highest-ROI next experiment — specific, measurable, and actionable.")
+        _nx_opts = ["(select a report)"]
+        _nx_reports: list = []
+        if REPORTS_PATH.exists():
+            try:
+                with open(REPORTS_PATH, "r", encoding="utf-8") as _nx_f:
+                    _nx_reports = json.load(_nx_f)
+                _nx_opts += [f"{e['timestamp']} · {e['label']}" for e in _nx_reports]
+            except Exception:
+                pass
+        _nx_sel = st.selectbox("Report for experiment suggestion:", _nx_opts, key="nx_sel", label_visibility="collapsed")
+        if st.button("Get next experiment →", key="nx_suggest", use_container_width=True):
+            if _nx_sel != "(select a report)":
+                _nx_idx = _nx_opts.index(_nx_sel) - 1
+                _nx_sum = compute_summary_from_results(_nx_reports[_nx_idx].get("report", {}).get("results", []))
+                if _nx_sum:
+                    _nx_scores = "\n".join(f"  - {k}: {v:.3f}" for k, v in sorted(_nx_sum.items()))
+                    st.session_state.advisor_messages.append({"role": "user", "content": (
+                        f"**Next Experiment Advisor** — Report: **{_nx_reports[_nx_idx]['label']}**\n\n"
+                        f"Current scores:\n{_nx_scores}\n\n"
+                        "Based on these scores and my architecture profile, recommend the **single highest-ROI next experiment** to run. "
+                        "Be specific and opinionated — one experiment only, not a menu of options:\n"
+                        "1. What exactly should I change, and from what value to what value?\n"
+                        "2. Which RAGVue metrics should improve, and roughly by how much?\n"
+                        "3. What result (metric threshold or pattern) would confirm the experiment succeeded?\n"
+                        "4. Are there any metrics that might degrade as a trade-off?"
+                    )})
+                    _save_advisor_history(st.session_state.advisor_messages)
+                    st.success("Sent to chat — switch to the **Chat** tab to see the recommendation.")
+                else:
+                    st.warning("No metric scores found in this report.")
+            else:
+                st.warning("Select a report first.")
+
+        st.markdown("---")
+
+        # ── Guided Diagnosis ──────────────────────────────────────────────────
+        st.markdown("**🩺 Guided Diagnosis**")
+        st.caption("Your advisor walks through Retrieval → Grounding → Generation, asking one question at a time, then produces a structured diagnosis you can export.")
+        if st.button("Start guided diagnosis →", key="guided_diag", use_container_width=True, type="primary"):
+            st.session_state.advisor_messages.append({"role": "user", "content": (
+                "Please start a structured guided diagnosis of my RAG pipeline. "
+                "Walk through each layer in order: (1) Retrieval quality, (2) Grounding / faithfulness, (3) Answer generation. "
+                "Ask me one focused question at a time per layer. "
+                "At the end, produce a concise structured diagnosis summary I can include in my research notes."
+            )})
+            _save_advisor_history(st.session_state.advisor_messages)
+            st.success("Diagnosis started — switch to the **Chat** tab to begin.")
 
 # ============================== FOOTER =======================================
 st.markdown("---")
