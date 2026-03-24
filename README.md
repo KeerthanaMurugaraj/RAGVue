@@ -177,8 +177,9 @@ streamlit run streamlit_app.py
 - **Report history** — last 10 reports saved automatically; view, filter, and delete from the Reports tab
 - **Report comparison** — select two saved reports side-by-side and inspect per-metric deltas (B − A)
 - **Longitudinal tracking** — persistent run registry with pipeline version and notes tags; themed metric trend chart (Plotly) and themed table across runs; automatic regression detection between the two most recent runs
-- **Your RAG Advisor** — persistent AI research partner for RAG architecture advice; three sub-tabs:
-  - *Chat* — streaming responses (token-by-token), file/diagram upload, quick starters, export; auto-inject banner shares your latest evaluation results in one click; 6 model options across OpenAI and Anthropic tiers
+- **Your RAG Advisor** *(Early Access — not yet validated on real datasets; feedback welcome at ragvue.license@gmail.com)* — AI research thinking partner for RAG architecture advice; four sub-tabs:
+  - *Getting Started* — mini walkthrough explaining what the advisor is, how a session works, what to share, and what it can/can't do
+  - *Chat* — streaming responses (token-by-token), file/diagram upload, quick starters, export; active architecture profile shown as a status chip; auto-inject banner shares your latest evaluation results in one click; 6 model options across OpenAI and Anthropic tiers; **two share modes**: 📊 Summary (mean scores per metric) and 🔍 Case Inspector (select any item from any saved report — injects the full question, answer, contexts, and per-metric diagnostic fields)
   - *My Profile* — save multiple architecture configurations (retriever, chunk size, embedding, LLM, framework, domain); full edit-in-place support; active profile is injected into every conversation automatically
   - *Analysis Tools* — **Before/After** report comparison, **Hypothesis Testing**, **Guided Diagnosis**, **Failure Mode Scanner** (identifies active RAG failure modes and prioritises top issues), **Suggest Next Experiment** (recommends the single highest-ROI next change with expected metric impact)
 - **Three UI themes** — Light (default), Dark (soft dim), and Beige; selectable from the ⚙️ Settings sidebar; all components including tables and charts adapt to the active theme

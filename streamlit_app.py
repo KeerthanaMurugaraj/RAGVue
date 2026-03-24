@@ -60,45 +60,337 @@ ADVISOR_HISTORY_PATH  = Path("rag_advisor_history.json")
 ADVISOR_PROFILE_PATH  = Path("rag_advisor_profile.json")
 ADVISOR_MAX_TURNS     = 20
 
-_ADVISOR_BASE_PROMPT = """You are RAG Advisor, an expert assistant specializing in Retrieval-Augmented Generation (RAG) pipeline design and evaluation.
+_ADVISOR_BASE_PROMPT = """You are RAG Advisor, an expert research thinking partner embedded in RAGVue — a reference-free evaluation framework for Retrieval-Augmented Generation systems. You have complete, detailed knowledge of every RAGVue metric, what each score means at different thresholds, how to map combinations of scores to specific RAG failure modes, and what concrete next steps to recommend in each case.
 
-You have deep knowledge of:
-- RAG architectures: dense retrieval, sparse (BM25), hybrid, reranking, HyDE
-- Chunking strategies: fixed-size, sentence-window, hierarchical, semantic chunking
-- Embedding models and their trade-offs
-- LLM generation: prompt design, context injection, output control
-- RAG failure modes: retrieval misses, hallucination, context ignorance, multi-hop errors
-- RAGVue evaluation metrics and what low scores mean:
-  * retrieval_relevance / retrieval_coverage: retrieval pipeline quality
-  * strict_faithfulness: hallucination (answer not grounded in context)
-  * context_utilization: retrieved context ignored by the LLM
-  * answer_relevance / answer_completeness: answer quality
-  * coherence / clarity: linguistic quality
-  * negative_rejection: system answers when it should say "I don't know"
-  * implicit_contradiction / multi_hop_faithfulness: subtle grounding failures
-  * calibration metrics: judge stability / reliability
+══════════════════════════════════════════════════════════════
+RAGVUE METRIC REFERENCE — ALL 22 METRICS
+══════════════════════════════════════════════════════════════
 
-Your approach:
-- Give concrete, actionable suggestions tailored to the user's specific architecture
-- Tie metric scores to likely root causes in their specific setup
-- Focus on the most impactful issue — do not dump all advice at once
+Inputs: Q = Question · A = Answer · C = Retrieved context chunks
+Score range: 0.0 (worst) → 1.0 (best) for all metrics.
+Score thresholds (general guidance): ≥ 0.75 good · 0.50–0.74 needs attention · < 0.50 critical
+
+── RETRIEVAL METRICS (inputs: Q + C) ──────────────────────
+
+1. retrieval_relevance
+   What it measures: how useful each retrieved chunk is for addressing the question (per-chunk scoring).
+   Extra fields returned: per_chunk (list of {chunk_id, relevance, reason}), explanation
+   LOW SCORE → chunks are off-topic; wrong embedding model, poor indexing, query too broad, or top-k retrieving noise.
+   Next steps: audit per_chunk to identify which chunks have low relevance scores and why; check embedding model domain alignment; try hybrid retrieval (BM25 + dense); increase top-k and re-rank.
+
+2. retrieval_coverage
+   What it measures: whether the retrieved context collectively covers all sub-aspects of the question.
+   Extra fields returned: per_aspect (list of {aspect, covered: true/false, evidence}), explanation
+   LOW SCORE → relevant chunks exist in the index but aren't retrieved, or chunk size is too small to carry full context.
+   Next steps: inspect per_aspect to see exactly which aspects are not covered (covered: false); increase top-k; try larger chunk size or sentence-window chunking; use query decomposition for multi-part questions.
+
+── GROUNDING METRICS (inputs: Q + A + C) ──────────────────
+
+3. strict_faithfulness
+   What it measures: fraction of factual claims in the answer directly supported by retrieved context.
+   Extra fields returned: supported_claims (list of {claim, supported_by}), hallucinated_claims (list of {claim, reason}), explanation
+   Score = supported_claims / total_claims. Claims are classified as "supported", "partial_hallucination", or "full_hallucination".
+   LOW SCORE → hallucination: LLM is generating facts not present in the context.
+   Next steps: inspect hallucinated_claims to see which specific facts are unsupported; tighten the generation prompt ("answer only using the provided context"); check if top-k chunks actually contain the answer; try a more instruction-following LLM.
+
+4. context_utilization
+   What it measures: whether the retrieved context is actually used in the answer, not just retrieved and ignored.
+   Extra fields returned: utilized_chunks, unused_chunks, justification
+   LOW SCORE → context ignorance: LLM answers from parametric memory rather than the retrieved evidence.
+   Next steps: rewrite system prompt to force context use ("base your answer strictly on the following passages"); check context injection format (how chunks are delimited in the prompt); lower temperature.
+
+5. negative_rejection
+   What it measures: whether the system correctly refuses to answer when context doesn't support an answer.
+   Extra fields returned: context_sufficient, answer_refuses, justification
+   LOW SCORE → over-confidence: system fabricates answers when it should say "I don't know".
+   Next steps: add explicit refusal instructions ("if the context does not contain enough information, say I don't know"); test with known unanswerable queries; check context_sufficient vs answer_refuses fields to see the mismatch pattern.
+
+6. multi_hop_faithfulness
+   What it measures: validity of multi-step reasoning chains — each step grounded in context and logically connected.
+   Extra fields returned: logical_hops (list of step descriptions), valid_hops (list of 1-based indices), broken_hops (list of {hop, reason}), justification
+   LOW SCORE → broken reasoning chains; intermediate steps lack supporting chunks or the chain logic is invalid.
+   Next steps: inspect broken_hops to see which specific hop index fails and why; increase top-k to cover intermediate steps; try step-back prompting or query decomposition; use retrieval re-ranking.
+
+7. implicit_contradiction
+   What it measures: subtle contradictions that strict_faithfulness misses — omitted qualifiers, negation flips, scope shifts, temporal misattribution.
+   Extra fields returned: contradictions (list), contradiction_types, justification
+   LOW SCORE (more contradictions) → subtle factual distortion even when surface faithfulness looks fine.
+   Next steps: inspect contradiction_types field — "negation_flip" → add precision instructions; "temporal_misattribution" → check time-sensitive document chunking; "scope_shift" → tighten answer boundary instructions in the prompt.
+
+── ANSWER QUALITY METRICS (inputs: Q + A) ─────────────────
+
+8. answer_relevance
+   What it measures: how well the answer aligns with the intent and scope of the question.
+   Extra fields returned: missing_parts (list of question parts not addressed), off_topic (list of answer parts that are irrelevant), justification
+   LOW SCORE → answer is off-topic, only partially addresses the question, or drifts from user intent.
+   Next steps: inspect missing_parts to see which parts of the question went unanswered; check off_topic for irrelevant content; check whether low retrieval_relevance is cascading into off-topic generation.
+
+9. answer_completeness
+   What it measures: whether the answer addresses all aspects of the question without omissions.
+   Extra fields returned: per_aspect (list of {aspect, covered: true/false, evidence}), explanation
+   LOW SCORE → incomplete answers; almost always paired with low retrieval_coverage (can't answer what wasn't retrieved).
+   Next steps: inspect per_aspect to find which aspects have covered: false; increase top-k; verify all question sub-aspects appear in your corpus; add completeness instructions to the prompt.
+
+10. clarity
+    What it measures: linguistic quality — grammar, fluency, logical flow, and readability of the answer.
+    Extra fields returned: explanation, issues (list of specific clarity problems), suggestions (improvement recommendations)
+    LOW SCORE → answer is hard to follow or grammatically poor; may indicate LLM quality issue or noisy context injection confusing generation.
+    Next steps: inspect issues field for specific problems; upgrade generation LLM tier; add explicit clarity/formatting instructions to the prompt; filter boilerplate from chunks before injection.
+
+11. answer_conciseness
+    What it measures: whether the answer is concise — no unnecessary verbosity, repetition, or filler.
+    Extra fields returned: redundant_parts, filler_detected, justification
+    LOW SCORE → verbose or padded answers; often a prompt issue ("explain in full detail") or model tendency.
+    Next steps: inspect redundant_parts and filler_detected fields; add length constraints to the prompt; instruct the model to be direct.
+
+12. coherence
+    What it measures: internal consistency of the answer — detects self-contradictions, logical fallacies, non-sequiturs, circular reasoning.
+    Extra fields returned: contradictions, logical_issues, justification
+    LOW SCORE → answer contradicts itself internally, regardless of how faithful it is to context.
+    Next steps: inspect logical_issues field; may indicate conflicting chunks being injected — try re-ranking to surface the most consistent chunks first; reduce the number of injected chunks if they contradict each other.
+
+── LOCAL DIAGNOSTIC METRICS (no API, zero cost) ───────────
+
+13. token_overlap  (inputs: Q + A + C)
+    Lexical overlap between answer tokens and context tokens. Fast, cheap hallucination signal.
+    LOW SCORE → answer vocabulary diverges from retrieved context; possible paraphrasing or hallucination. Check alongside strict_faithfulness.
+
+14. answer_length  (input: A)
+    Answer length relative to question complexity. Detects trivially short or runaway-long answers.
+
+15. context_similarity  (inputs: A + C)
+    Semantic similarity between answer and context using embedding cosine similarity.
+    LOW SCORE → semantically distant from retrieved content; strong hallucination signal when paired with low faithfulness.
+
+16. readability  (input: A)
+    Flesch-Kincaid readability score normalised 0–1.
+    LOW SCORE → overly complex language; may not match the target audience.
+
+Note: local metrics are diagnostic signals only — they do not contribute to answer_overall.
+
+── CALIBRATION METRICS (judge stability) ──────────────────
+
+17. calibration_retrieval_relevance   (Q + C)
+18. calibration_retrieval_coverage    (Q + C)
+19. calibration_answer_relevance      (Q + A)
+20. calibration_answer_completeness   (Q + A)
+21. calibration_clarity               (A)
+22. calibration_strict_faithfulness   (A + C)
+    + calibration_generic             (Q + A + C)
+
+Each re-runs its base metric across 6–7 judge model/temperature combinations and measures inter-judge agreement.
+HIGH calibration score → judge is stable; trust the base metric score.
+LOW calibration score → metric outcome is sensitive to judge configuration; treat that score with less confidence and re-evaluate.
+Always check calibration before drawing hard conclusions from a core metric score.
+
+══════════════════════════════════════════════════════════════
+COMPOSITE SCORES
+══════════════════════════════════════════════════════════════
+
+retrieval_overall = harmonic mean of (retrieval_relevance, retrieval_coverage)
+  Harmonic mean penalises imbalance — you need both relevance AND coverage.
+  A 0.9/0.4 split gives 0.55, not 0.65. Always investigate the weaker of the two.
+
+answer_overall = weighted blend of 9 metrics (weights renormalised over whichever are present):
+  strict_faithfulness=0.30, answer_relevance=0.20, coherence=0.10,
+  implicit_contradiction=0.10, answer_completeness=0.10,
+  clarity=0.05, answer_conciseness=0.05, negative_rejection=0.05, multi_hop_faithfulness=0.05
+  The dominant driver is strict_faithfulness (30%) — a hallucination problem tanks answer_overall fast.
+
+══════════════════════════════════════════════════════════════
+FAILURE MODE PATTERNS — SCORE COMBINATIONS → ROOT CAUSES
+══════════════════════════════════════════════════════════════
+
+Use these patterns when a user shares scores. Multiple patterns can co-occur.
+Priority order: fix Retrieval (A, B) before Grounding (C, D, E) before Generation (F, G) — bad retrieval cascades downstream.
+
+PATTERN A — Retrieval Miss
+  Signals: retrieval_relevance < 0.5 AND retrieval_coverage < 0.5
+  Root cause: wrong chunks retrieved; embedding mismatch, poor indexing, or top-k too low.
+  Next steps: audit per_chunk_scores; check embedding model domain alignment; increase top-k; try hybrid retrieval (BM25 + dense); re-rank retrieved chunks.
+
+PATTERN B — Context Ignorance
+  Signals: retrieval_relevance ≥ 0.6 BUT context_utilization < 0.5 (good retrieval, ignored by LLM)
+  Often paired with: low token_overlap, low context_similarity
+  Root cause: relevant chunks retrieved but LLM answers from parametric memory.
+  Next steps: rewrite prompt to force context use; check how chunks are delimited in the prompt; reduce LLM temperature; try a more grounded/smaller model that is less likely to override context.
+
+PATTERN C — Hallucination
+  Signals: strict_faithfulness < 0.5; often paired with low context_similarity and high token_overlap divergence
+  Root cause: LLM generating facts not present in context; may co-occur with context ignorance.
+  Next steps: inspect unsupported_claims; tighten faithfulness instructions; check if context actually contains the answer; reduce temperature; try constrained generation.
+
+PATTERN D — Over-confidence (Unanswerable Handling Failure)
+  Signals: negative_rejection < 0.5
+  Root cause: system answers confidently when context is insufficient.
+  Next steps: add explicit "I don't know" fallback instructions; test with held-out unanswerable queries; check context_sufficient field to confirm context truly doesn't support the answer.
+
+PATTERN E — Multi-Hop Reasoning Failure
+  Signals: multi_hop_faithfulness < 0.5; often paired with low retrieval_coverage
+  Root cause: intermediate reasoning steps lack supporting chunks, or chain logic is broken.
+  Next steps: inspect broken_hops field; decompose multi-hop queries; increase top-k; use step-back prompting to retrieve prerequisite facts first.
+
+PATTERN F — Subtle Faithfulness Issues (missed by core metrics)
+  Signals: strict_faithfulness acceptable (≥ 0.6) BUT implicit_contradiction low
+  Root cause: surface-level grounding looks fine but qualifiers, scope, or negation are distorted.
+  Next steps: inspect contradiction_types field for specific distortion type; add precision instructions to the prompt; check if chunk boundaries are cutting important qualifiers.
+
+PATTERN G — Generation Quality Degradation
+  Signals: coherence < 0.5, clarity < 0.5, or answer_conciseness low — independent of retrieval scores
+  Root cause: LLM output quality issue; noisy context injection or wrong model tier.
+  Next steps: upgrade generation LLM; filter boilerplate from chunks before injection; add explicit output format and tone instructions; check logical_issues and redundant_parts fields.
+
+PATTERN H — Incomplete Answers
+  Signals: answer_completeness < 0.6 AND retrieval_coverage < 0.6
+  Root cause: missing sub-aspects in retrieval cascade into incomplete generation.
+  Next steps: inspect missing_aspects fields from both metrics; increase top-k; increase chunk overlap; verify all question sub-aspects exist in the corpus.
+
+══════════════════════════════════════════════════════════════
+ANALYSIS TOOLS AVAILABLE IN THIS DASHBOARD
+══════════════════════════════════════════════════════════════
+
+Proactively recommend these tools when they fit the situation (they are in the Analysis Tools sub-tab):
+
+- Before/After Comparison: user selects two saved reports; you explain what changed between runs and hypothesise why.
+- Hypothesis Testing: user describes a planned change; you predict which metrics will improve or degrade before they run it.
+- Failure Mode Scanner: user sends a saved report; you identify all active failure modes and prioritise the top 2 fixes.
+- Suggest Next Experiment: user sends a saved report; you recommend the single highest-ROI next experiment with specific change, expected metric impact, and success threshold.
+- Guided Diagnosis: step-by-step walkthrough of Retrieval → Grounding → Generation, one question at a time, ending in a structured diagnosis summary.
+
+══════════════════════════════════════════════════════════════
+RESEARCH PARTNER BEHAVIOURS
+══════════════════════════════════════════════════════════════
+
+You are a research reasoning partner, not a decision maker. These behaviours are mandatory:
+
+1. ASK BEFORE DIAGNOSING — if the user reports a problem without sharing scores or setup details, ask for them before offering any diagnosis. Never guess at root causes without data.
+
+2. HYPOTHESES, NOT VERDICTS — always offer 2 competing hypotheses before settling on one. Use language like "one explanation is... another possibility is... to distinguish between them, try...". Never present a single cause as certain.
+
+3. STAY SPECIFIC — reference the user's actual metric values, their actual profile parameters, and the actual diagnostic fields (missing_aspects, broken_hops, etc.) when they are available. Do not give advice that would apply to any RAG system.
+
+4. STATE UNCERTAINTY EXPLICITLY — if you cannot determine the root cause from the information shared, say so clearly. "I can't tell from these scores alone whether the issue is X or Y — here's what would help distinguish them."
+
+5. CLOSE WITH ONE ACTION — end every substantive response with exactly one concrete next action the user can take, phrased as a hypothesis to test: "My suggestion: try X and re-run the RAGVue evaluation. If [metric] improves, that confirms the root cause was Y."
+
+6. PUSH BACK TO EVALUATION — after any change is made, always encourage the user to re-run RAGVue and share the new scores. Progress is measured empirically, not by agreement with your suggestions.
+
+7. RECOMMEND TOOLS PROACTIVELY — when the conversation fits a tool (e.g. user wants to compare two runs → Before/After; user describes a planned change → Hypothesis Testing), name it explicitly.
+
+══════════════════════════════════════════════════════════════
+YOUR APPROACH
+══════════════════════════════════════════════════════════════
+
+- When a user shares scores, apply the failure mode patterns above to identify root cause candidates before giving advice
+- Prioritise: Retrieval (patterns A, B) → Grounding (C, D, E, F) → Generation (G, H); bad retrieval cascades downstream and must be fixed first
+- Reference specific diagnostic fields (missing_aspects, broken_hops, contradiction_types, etc.) when the user shares them
+- Focus on ONE most impactful issue — do not dump all advice at once
 - Always reason step by step before concluding
 
-IMPORTANT — disclaimer you must honour in every session:
-You are a research reasoning partner, NOT a ground truth. Your suggestions are hypotheses to test, not guaranteed fixes. Always encourage the user to validate suggestions empirically with RAGVue evaluations.
+══════════════════════════════════════════════════════════════
+EXAMPLES OF GOOD RESEARCH PARTNER RESPONSES
+══════════════════════════════════════════════════════════════
 
-You do NOT have access to the user's evaluation data unless they explicitly share it."""
+EXAMPLE 1 — User shares scores, asking for diagnosis:
+
+User: "strict_faithfulness=0.38, context_utilization=0.71, retrieval_relevance=0.82"
+
+Good response:
+"Interesting pattern — your retrieval is healthy (0.82) and the LLM is actively using the context it receives (0.71), yet faithfulness is still low (0.38). This rules out Pattern A (retrieval miss) and Pattern B (context ignorance), which is actually useful — the problem is happening at the generation level.
+
+Two hypotheses worth testing:
+(1) The generation prompt isn't strict enough — the LLM is blending retrieved context with its own parametric knowledge, producing claims that feel grounded but aren't. This is the most common cause of this pattern.
+(2) The retrieved chunks contain the right topic but not the specific claims the LLM is generating — so context_utilization looks fine (it's using what it got) but what it got doesn't support the answer.
+
+To distinguish between them: look at the hallucinated_claims field from strict_faithfulness. Are the hallucinated claims factual elaborations (suggests hypothesis 1) or entirely fabricated facts (suggests hypothesis 2)?
+
+My suggestion: first tighten your generation prompt with an explicit instruction like 'answer only using the information in the provided passages; do not add external knowledge.' Re-run RAGVue and share the new strict_faithfulness score — if it rises significantly, hypothesis 1 was correct."
+
+EXAMPLE 2 — User reports a vague problem without data:
+
+User: "My RAG isn't performing well."
+
+Good response:
+"Happy to help dig into this. To give you a useful diagnosis rather than generic advice, I need a bit more to go on:
+
+- Which RAGVue metrics are showing low scores? (or share the full summary)
+- What does your setup look like — retriever type, chunk size, top-k, generation LLM?
+- Is this a new regression or has performance always been this way?
+
+If you've already run a RAGVue evaluation, the quickest path is to share the scores here or use the 'Share with advisor' button at the top of this tab — then I can map your results to specific failure mode patterns."
+
+EXAMPLE 3 — User asks about a planned change before running it:
+
+User: "I'm thinking of reducing my chunk size from 512 to 128 tokens. Good idea?"
+
+Good response:
+"It depends on which problem you're trying to solve — smaller chunks help some things and hurt others.
+
+If your current issue is low retrieval_relevance (chunks contain too many topics so the most relevant passage is diluted), smaller chunks can sharpen precision.
+
+However, 128 tokens is quite small and carries real risks: retrieval_coverage often drops because each chunk no longer contains enough context to answer a question fully, and answer_completeness tends to follow. If your current retrieval_coverage is already below 0.7, I'd be cautious.
+
+A better framing: what specific metric are you trying to improve? If you share your current scores, I can tell you whether chunk size is likely the lever or whether something else is driving the problem. The Hypothesis Testing tool (Analysis Tools tab) is designed exactly for this — describe the change, and we reason through the expected metric impact before you run the experiment."
+
+EXAMPLE 4 — User shares before/after scores:
+
+User: "I increased top-k from 3 to 8. retrieval_coverage went from 0.54 to 0.71 but strict_faithfulness dropped from 0.72 to 0.61."
+
+Good response:
+"This is a classic retrieval-faithfulness trade-off and it's actually a good result to analyse — you've confirmed that top-k was limiting coverage, which is useful. Now you have a new problem to solve.
+
+The faithfulness drop (0.72 → 0.61) with more retrieved chunks is a coherence/noise pattern: the additional chunks are introducing conflicting or irrelevant content that the LLM is incorporating into its answer. Two hypotheses:
+(1) Some of the new chunks (ranks 4–8) are relevant to the topic but contain subtly different facts — the LLM is blending them with the top-ranked chunks.
+(2) Some of the new chunks are noisy/off-topic and are confusing the generation.
+
+Check context_utilization and coherence in the new run — if coherence also dropped, hypothesis 2 is more likely. If coherence held steady, hypothesis 1.
+
+My suggestion: add a re-ranker between retrieval and generation to keep top-k=8 for coverage but pass only the top 4 re-ranked chunks to the LLM. This often recovers faithfulness without sacrificing coverage. Re-run RAGVue after and share both retrieval and faithfulness scores."
+
+IMPORTANT: You are a research reasoning partner, NOT a ground truth. Your suggestions are hypotheses to test, not guaranteed fixes. Always remind the user to validate with RAGVue evaluations.
+
+You do NOT have access to the user's evaluation data unless they explicitly share it. When they share metric scores, use the failure mode patterns and metric reference above to give targeted, specific advice.
+
+SCOPE: Your primary focus is RAG systems, RAGVue evaluation, retrieval pipelines, embedding models, chunking strategies, LLM generation, and NLP/ML research. For questions in this space, use both the metric reference above and your own parametric knowledge to give the best possible answer.
+
+For general questions outside RAG (e.g. general coding, writing, maths, other domains), you may answer using your parametric knowledge as you normally would — you are not restricted to RAG topics only. However, always bring the conversation back to RAG or evaluation when there is a natural connection.
+
+The one exception: do not engage with harmful, unethical, or clearly off-topic personal requests that have no research or technical value."""
 
 
 def _build_advisor_system_prompt(profile: dict) -> str:
     """Inject active architecture profile into system prompt if available."""
     if not profile:
         return _ADVISOR_BASE_PROMPT
+
+    _FIELD_LABELS = {
+        "retriever":       "Retriever type",
+        "chunk_size":      "Chunk size (tokens)",
+        "chunk_overlap":   "Chunk overlap",
+        "top_k":           "Top-k retrieved",
+        "embedding_model": "Embedding model",
+        "generation_llm":  "Generation LLM",
+        "framework":       "Framework / stack",
+        "domain":          "Domain / use case",
+        "notes":           "Additional notes",
+    }
     _SKIP = {"name", "saved_at"}
-    lines = [f"  - {k}: {v}" for k, v in profile.items() if v and k not in _SKIP]
-    name_tag = f" ({profile['name']})" if profile.get("name") else ""
-    block = f"Active architecture profile{name_tag}:\n" + "\n".join(lines)
-    return _ADVISOR_BASE_PROMPT + "\n\n" + block
+
+    name_tag = f" — {profile['name']}" if profile.get("name") else ""
+    lines = []
+    for k, v in profile.items():
+        if v and k not in _SKIP:
+            label = _FIELD_LABELS.get(k, k.replace("_", " ").title())
+            lines.append(f"  {label}: {v}")
+
+    profile_block = (
+        f"\n\nACTIVE ARCHITECTURE PROFILE{name_tag}:\n"
+        + "\n".join(lines)
+        + "\n\nUse this profile to personalise every response. Reference the actual values above "
+        "when diagnosing issues and proposing next steps."
+    )
+
+    return _ADVISOR_BASE_PROMPT + profile_block
 
 
 def _load_advisor_history() -> list:
@@ -1791,7 +2083,7 @@ st.markdown(
         <div class="ticker-item">⚖️ <span>OpenAI + Anthropic judge backends</span></div>
         <div class="ticker-item">📊 <span>Cross-model calibration</span></div>
         <div class="ticker-item">📈 <span>Longitudinal tracking &amp; regression detection</span></div>
-        <div class="ticker-item">🧠 <span>Your RAG Advisor — AI research partner</span></div>
+        <div class="ticker-item">🧠 <span>Your RAG Advisor — AI research thinking partner</span></div>
         <div class="ticker-item">🔬 <span>Hypothesis testing &amp; guided diagnosis</span></div>
         <div class="ticker-item">📎 <span>Upload architecture diagrams for analysis</span></div>
         <div class="ticker-item">🗂 <span>Multi-profile architecture history</span></div>
@@ -1804,7 +2096,7 @@ st.markdown(
         <div class="ticker-item">⚖️ <span>OpenAI + Anthropic judge backends</span></div>
         <div class="ticker-item">📊 <span>Cross-model calibration</span></div>
         <div class="ticker-item">📈 <span>Longitudinal tracking &amp; regression detection</span></div>
-        <div class="ticker-item">🧠 <span>Your RAG Advisor — AI research partner</span></div>
+        <div class="ticker-item">🧠 <span>Your RAG Advisor — AI research thinking partner</span></div>
         <div class="ticker-item">🔬 <span>Hypothesis testing &amp; guided diagnosis</span></div>
         <div class="ticker-item">📎 <span>Upload architecture diagrams for analysis</span></div>
         <div class="ticker-item">🗂 <span>Multi-profile architecture history</span></div>
@@ -1886,7 +2178,7 @@ with fc1:
 - **Manual & Agentic modes** — pick metrics yourself or let the orchestrator auto-select and synthesize
 - **Report history & comparison** — last 10 reports saved; side-by-side delta view (B − A)
 - **Longitudinal tracking** — persistent run registry, metric trend charts, automatic regression detection
-- **Your RAG Advisor** — persistent AI research partner with architecture profiles, hypothesis testing, before/after analysis, guided diagnosis, and file/diagram upload
+- **Your RAG Advisor** — persistent AI research thinking partner with architecture profiles, hypothesis testing, before/after analysis, guided diagnosis, and file/diagram upload
 - **Multi-interface** — Python API, CLI (`ragvue-cli`, `ragvue-py`), FastAPI REST, Streamlit UI
         """
     )
@@ -1895,7 +2187,7 @@ with fc2:
     st.markdown('<h3 class="tab-heading">🎯 How It Benefits You</h3>', unsafe_allow_html=True)
     st.markdown(
         """
-- **Researchers** — explainable metrics, not black-box scores; compare RAG variants across runs; use the RAG Advisor as a research partner to form and test hypotheses without leaving the dashboard
+- **Researchers** — explainable metrics, not black-box scores; compare RAG variants across runs; use the RAG Advisor as a research thinking partner to form and test hypotheses without leaving the dashboard
 - **Engineers** — plug-and-play API and CLI that fit into existing pipelines; parallel metric execution keeps evaluation fast even at scale
 - **Paper authors** — reproducible, citable evaluation with structured per-item reasoning; export directly to Markdown or HTML for appendices
 - **Teams iterating on RAG** — longitudinal tracking catches regressions before they reach production; before/after comparison explains what changed and why
@@ -2365,9 +2657,21 @@ with tab_longitudinal:
 with tab_advisor:
     st.markdown('<h3 class="tab-heading">🤖 Your RAG Advisor</h3>', unsafe_allow_html=True)
     st.markdown(
-        "<p style='text-align:center; color:var(--muted); font-size:0.82rem; font-style:italic; margin-bottom:0.8rem;'>"
-        "Research partner, not ground truth — suggestions are hypotheses to validate empirically, not guaranteed fixes."
+        "<p style='text-align:center; color:var(--muted); font-size:0.82rem; font-style:italic; margin-bottom:0.6rem;'>"
+        "Research Thinking partner, not ground truth — suggestions are hypotheses to validate empirically, not guaranteed fixes."
         "</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div style='text-align:center; margin-bottom:1rem;'>"
+        "<span style='display:inline-flex; align-items:center; gap:0.45rem; "
+        "background:var(--chip-bg); border:1px solid var(--chip-border); "
+        "border-radius:20px; padding:0.28rem 1rem; font-size:0.8rem; color:var(--muted);'>"
+        "🧪 <strong style='color:var(--accent);'>Early Access</strong> — "
+        "not yet validated on real datasets. Advice may be incomplete or off. "
+        "Suggestions &amp; feedback welcome: "
+        "<a href='mailto:ragvue.license@gmail.com' style='color:var(--accent);'>ragvue.license@gmail.com</a>"
+        "</span></div>",
         unsafe_allow_html=True,
     )
 
@@ -2379,19 +2683,358 @@ with tab_advisor:
     _adv_system_prompt = _build_advisor_system_prompt(_adv_profile)
 
     if not st.session_state.advisor_messages:
-        _profile_note = (
-            " I already know your architecture from your saved profile."
-            if _adv_profile else
-            " To get started: describe your RAG setup, or fill in your **Architecture Profile** (tab above)."
-        )
-        st.session_state.advisor_messages = [{
-            "role": "assistant",
-            "content": "Hi! I'm **Your RAG Advisor** — a research partner for diagnosing and improving your RAG pipeline." + _profile_note,
-        }]
+        if _adv_profile:
+            _welcome = (
+                f"Hi! I'm **Your RAG Advisor** — your research thinking partner for diagnosing and improving your RAG pipeline.\n\n"
+                f"I can see your **{_adv_profile.get('name', 'active')}** profile is loaded "
+                f"({', '.join(v for k, v in _adv_profile.items() if v and k not in ('name', 'saved_at', 'notes'))[:120]}…), "
+                f"so I'll tailor everything to your specific setup.\n\n"
+                f"The best place to start is sharing your latest evaluation scores — use the **Share with advisor** banner "
+                f"at the top of this tab after running an evaluation, or paste your scores directly. "
+                f"Then tell me what you're trying to understand and we'll dig in together."
+            )
+        else:
+            _welcome = (
+                "Hi! I'm **Your RAG Advisor** — your research thinking partner for diagnosing and improving your RAG pipeline.\n\n"
+                "Before we start, I'd suggest doing two things:\n\n"
+                "**① Go to My Profile** and save your pipeline setup (retriever type, chunk size, top-k, embedding model, LLM). "
+                "Without it, my advice will be generic rather than specific to your architecture.\n\n"
+                "**② Run a RAGVue evaluation** and share the scores here — that gives us something concrete to reason about.\n\n"
+                "If you're not sure where to begin, check the **Getting Started** tab for a quick walkthrough. "
+                "Or just ask me anything — I'm happy to start with a question."
+            )
+        st.session_state.advisor_messages = [{"role": "assistant", "content": _welcome}]
         _save_advisor_history(st.session_state.advisor_messages)
 
     # ── Sub-tabs ──────────────────────────────────────────────────────────────
-    _atab_chat, _atab_profile, _atab_tools = st.tabs(["💬 Chat", "🗂 My Profile", "🔬 Analysis Tools"])
+    _atab_start, _atab_chat, _atab_profile, _atab_tools = st.tabs(["🚀 Getting Started", "💬 Chat", "🗂 My Profile", "🔬 Analysis Tools"])
+
+    # ═══════════════════════════ GETTING STARTED SUB-TAB ═════════════════════
+    with _atab_start:
+
+        st.markdown("""
+<style>
+/* ── Getting Started page styles ───────────────────────────────────────── */
+.gs-hero {
+    background: linear-gradient(135deg, var(--card) 0%, var(--bg-alt) 100%);
+    border: 1px solid var(--card-border);
+    border-left: 5px solid var(--accent);
+    border-radius: 14px;
+    padding: 2rem 2.2rem 1.8rem;
+    margin-bottom: 2rem;
+    text-align: center;
+}
+.gs-hero h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.55rem;
+    font-weight: 700;
+    color: var(--accent);
+}
+.gs-hero p {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--muted);
+    max-width: 660px;
+    margin: 0 auto;
+    line-height: 1.6;
+}
+.gs-section-label {
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 2rem 0 1rem;
+}
+.gs-steps-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+.gs-step {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1.2rem 1.4rem;
+    position: relative;
+}
+.gs-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    border-radius: 50%;
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+}
+.gs-step h4 {
+    margin: 0 0 0.5rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.gs-step p {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--muted);
+    line-height: 1.6;
+}
+.gs-compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-bottom: 2rem;
+}
+.gs-compare-bad {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+}
+.gs-compare-good {
+    background: var(--chip-bg);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+}
+.gs-compare-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
+    color: var(--muted);
+}
+.gs-compare-good .gs-compare-label { color: var(--accent); }
+.gs-compare-text {
+    font-size: 0.95rem;
+    color: var(--muted);
+    font-style: italic;
+    line-height: 1.55;
+}
+.gs-can-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+.gs-can-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1.2rem 1.4rem;
+}
+.gs-can-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-bottom: 0.7rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.gs-can-yes { color: #22c55e; }
+.gs-cant-no { color: #ef4444; }
+.gs-can-item {
+    font-size: 0.94rem;
+    color: var(--muted);
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--card-border);
+    line-height: 1.5;
+}
+.gs-can-item:last-child { border-bottom: none; }
+.gs-can-badge {
+    display: inline-block;
+    width: 1.1rem;
+    font-weight: 700;
+    font-size: 0.85rem;
+    margin-right: 0.25rem;
+}
+.gs-can-badge.yes { color: #22c55e; }
+.gs-can-badge.no  { color: #ef4444; }
+.gs-golden {
+    background: var(--chip-bg);
+    border: 1px solid var(--chip-border);
+    border-radius: 10px;
+    padding: 1rem 1.4rem;
+    margin-bottom: 2rem;
+    font-size: 0.97rem;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.55;
+}
+.gs-golden strong { color: var(--accent); }
+.gs-jump-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.9rem;
+}
+.gs-jump-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1.15rem 1.2rem;
+    text-align: center;
+    cursor: default;
+    transition: border-color 0.2s;
+}
+.gs-jump-card:hover { border-color: var(--accent); }
+.gs-jump-icon {
+    font-size: 1.6rem;
+    margin-bottom: 0.5rem;
+}
+.gs-jump-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 0.35rem;
+}
+.gs-jump-desc {
+    font-size: 0.9rem;
+    color: var(--muted);
+    line-height: 1.5;
+}
+</style>
+
+<!-- HERO -->
+<div class="gs-hero">
+  <h2>🧠 Your RAG Advisor</h2>
+  <p>
+    A research thinking partner built into your evaluation dashboard.<br>
+    It doesn't run evaluations — it helps you reason through what your scores
+    and diagnostic fields mean, and figure out the right experiment to try next.
+  </p>
+</div>
+
+<!-- WHAT IS IT -->
+<div class="gs-section-label">What is it?</div>
+<div class="card" style="margin-bottom:1.5rem; padding:1.2rem 1.4rem; font-size:0.97rem; color:var(--muted); line-height:1.65;">
+RAGVue gives you <strong style="color:var(--text)">metric scores, per-item breakdowns, hallucinated claims, diagnostic fields,
+and detailed explanations</strong> for every evaluation run.
+The scores tell you <em>what</em> happened — the Advisor helps you figure out <em>why</em> it happened in your specific pipeline
+and <em>what</em> to do about it.<br><br>
+A <code>strict_faithfulness</code> of 0.41 with hallucinated claims listed is useful evidence, but it still leaves open
+questions: retrieval problem? prompt problem? wrong LLM?
+The Advisor knows every RAGVue metric and its diagnostic fields in detail, understands how pipeline choices affect scores,
+and helps you form one focused hypothesis to test at a time — moving you from <em>"my scores are low"</em> to
+<em>"here is the most likely cause and here is exactly how to test it."</em>
+</div>
+
+<!-- HOW IT WORKS -->
+<div class="gs-section-label">How a typical session works</div>
+<div class="gs-steps-grid">
+  <div class="gs-step">
+    <div class="gs-step-num">1</div>
+    <h4>Save your pipeline setup</h4>
+    <p>Go to <strong>My Profile</strong> and fill in your retriever type, chunk size, top-k, embedding model,
+    and generation LLM. The advisor references your actual values in every response —
+    so instead of "try increasing top-k", it says "try increasing your top-k from 3 to 7".</p>
+  </div>
+  <div class="gs-step">
+    <div class="gs-step-num">2</div>
+    <h4>Run a RAGVue evaluation</h4>
+    <p>Use the <strong>Evaluate</strong> tab to run your data through the metrics. When it's done,
+    a banner appears at the top of the Chat tab —
+    one click shares your results with the advisor.</p>
+  </div>
+  <div class="gs-step">
+    <div class="gs-step-num">3</div>
+    <h4>Ask what the scores mean</h4>
+    <p>Describe what you're seeing or just ask directly. The advisor maps your score pattern
+    to likely root causes in your specific pipeline and tells you which layer —
+    retrieval, grounding, or generation — to investigate first.</p>
+  </div>
+  <div class="gs-step">
+    <div class="gs-step-num">4</div>
+    <h4>Get one experiment to run</h4>
+    <p>The advisor gives you one specific change to make, which metrics it expects to improve,
+    and what result would confirm the hypothesis.
+    Make the change, re-run RAGVue, share the new scores, and repeat.</p>
+  </div>
+</div>
+
+<!-- WHAT TO SHARE -->
+<div class="gs-section-label">What to share for the best advice</div>
+<div class="gs-compare-grid">
+  <div class="gs-compare-bad">
+    <div class="gs-compare-label">❌ Too vague — generic reply</div>
+    <div class="gs-compare-text">"My RAG isn't working well"</div>
+  </div>
+  <div class="gs-compare-good">
+    <div class="gs-compare-label">✅ Specific — actionable reply</div>
+    <div class="gs-compare-text">"strict_faithfulness=0.38, context_utilization=0.71, retrieval_relevance=0.82 — what's going on?"</div>
+  </div>
+  <div class="gs-compare-bad">
+    <div class="gs-compare-label">❌ Too vague</div>
+    <div class="gs-compare-text">"Should I change my chunk size?"</div>
+  </div>
+  <div class="gs-compare-good">
+    <div class="gs-compare-label">✅ Specific</div>
+    <div class="gs-compare-text">"retrieval_coverage=0.54, chunks=512 tokens, top-k=3. Would reducing chunk size help?"</div>
+  </div>
+  <div class="gs-compare-bad">
+    <div class="gs-compare-label">❌ Too vague</div>
+    <div class="gs-compare-text">"My scores dropped after a change"</div>
+  </div>
+  <div class="gs-compare-good">
+    <div class="gs-compare-label">✅ Specific</div>
+    <div class="gs-compare-text">"After increasing top-k from 3 to 8, coverage improved but faithfulness dropped 0.72→0.61. Why?"</div>
+  </div>
+</div>
+
+<!-- CAN / CAN'T -->
+<div class="gs-section-label">What it can and can't do</div>
+<div class="gs-can-grid">
+  <div class="gs-can-card">
+    <div class="gs-can-title gs-can-yes">✅ It can</div>
+    <div class="gs-can-item"><span class="gs-can-badge yes">✓</span>Interpret RAGVue metric scores and map them to root causes</div>
+    <div class="gs-can-item"><span class="gs-can-badge yes">✓</span>Tailor advice to your retriever, chunk size, LLM, and domain</div>
+    <div class="gs-can-item"><span class="gs-can-badge yes">✓</span>Predict which metrics a planned change will affect — before you run it</div>
+    <div class="gs-can-item"><span class="gs-can-badge yes">✓</span>Explain what each metric measures and what its diagnostic fields contain</div>
+    <div class="gs-can-item"><span class="gs-can-badge yes">✓</span>Compare two evaluation runs and explain what changed and why</div>
+    <div class="gs-can-item"><span class="gs-can-badge yes">✓</span>Walk you through a structured diagnosis step by step</div>
+    <div class="gs-can-item"><span class="gs-can-badge yes">✓</span>Answer general ML, NLP, and RAG questions using its own knowledge</div>
+  </div>
+  <div class="gs-can-card">
+    <div class="gs-can-title gs-cant-no">❌ It can't</div>
+    <div class="gs-can-item"><span class="gs-can-badge no">✗</span>Access your documents, chunks, or prompt templates — only what you share</div>
+    <div class="gs-can-item"><span class="gs-can-badge no">✗</span>Run evaluations on your behalf</div>
+    <div class="gs-can-item"><span class="gs-can-badge no">✗</span>Guarantee any suggestion will improve your scores</div>
+    <div class="gs-can-item"><span class="gs-can-badge no">✗</span>Replace empirical testing — its suggestions are hypotheses, not verdicts</div>
+    <div class="gs-can-item"><span class="gs-can-badge no">✗</span>Debug your code directly</div>
+  </div>
+</div>
+
+<!-- GOLDEN RULE -->
+<div class="gs-golden">
+  <strong>The golden rule:</strong> run a RAGVue evaluation after every change.
+  The advisor helps you plan <em>what</em> to change — the metrics tell you <em>whether it worked</em>.
+</div>
+
+<!-- JUMP CARDS -->
+<div class="gs-section-label">Ready to start? Pick your first step</div>
+<div class="gs-jump-grid">
+  <div class="gs-jump-card">
+    <div class="gs-jump-icon">👤</div>
+    <div class="gs-jump-title">① Set up My Profile</div>
+    <div class="gs-jump-desc">Save your pipeline configuration so advice is tailored to your exact setup.</div>
+  </div>
+  <div class="gs-jump-card">
+    <div class="gs-jump-icon">💬</div>
+    <div class="gs-jump-title">② Open the Chat</div>
+    <div class="gs-jump-desc">Share your evaluation scores and ask what they mean for your pipeline.</div>
+  </div>
+  <div class="gs-jump-card">
+    <div class="gs-jump-icon">🔬</div>
+    <div class="gs-jump-title">③ Try Analysis Tools</div>
+    <div class="gs-jump-desc">Run the Failure Mode Scanner or Suggest Next Experiment if you already have results.</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     # ═══════════════════════════ CHAT SUB-TAB ════════════════════════════════
     with _atab_chat:
@@ -2433,8 +3076,8 @@ with tab_advisor:
                     st.session_state.advisor_last_offered_ts = _nr_ts
                     st.rerun()
 
-        # Thin controls bar
-        _cc1, _cc2, _cc3, _cc4 = st.columns([3, 3, 2, 2])
+        # Thin controls bar — row 1: model / export / clear
+        _cc1, _cc3, _cc4 = st.columns([4, 2, 2])
         with _cc1:
             _ADV_MODEL_OPTIONS = [
                 "gpt-4o-mini  ·  OpenAI  ·  fast",
@@ -2450,33 +3093,6 @@ with tab_advisor:
             )
             _adv_model    = _adv_model_choice.split("  ·  ")[0].strip()
             _adv_provider = "anthropic" if "Anthropic" in _adv_model_choice else "openai"
-        with _cc2:
-            _adv_report_opts = ["📋 Share a saved report…"]
-            _adv_reports: list = []
-            if REPORTS_PATH.exists():
-                try:
-                    with open(REPORTS_PATH, "r", encoding="utf-8") as _f:
-                        _adv_reports = json.load(_f)
-                    _adv_report_opts += [f"{e['timestamp']} · {e['label']}" for e in _adv_reports]
-                except Exception:
-                    pass
-            _adv_report_sel = st.selectbox(
-                "Report:", _adv_report_opts, key="advisor_report_sel", label_visibility="collapsed"
-            )
-            if _adv_report_sel != "📋 Share a saved report…":
-                _sel_idx   = _adv_report_opts.index(_adv_report_sel) - 1
-                _sel_entry = _adv_reports[_sel_idx]
-                _sel_sum   = compute_summary_from_results(_sel_entry.get("report", {}).get("results", []))
-                if _sel_sum:
-                    _inject_text = (
-                        f"Here are my evaluation results from **{_sel_entry['label']}** ({_sel_entry['timestamp']}):\n"
-                        + "\n".join(f"  - {k}: {v:.3f}" for k, v in sorted(_sel_sum.items()))
-                    )
-                    _last_adv = st.session_state.advisor_messages[-1] if st.session_state.advisor_messages else {}
-                    if _last_adv.get("content") != _inject_text:
-                        st.session_state.advisor_messages.append({"role": "user", "content": _inject_text})
-                        _save_advisor_history(st.session_state.advisor_messages)
-                        st.rerun()
         with _cc3:
             if len(st.session_state.advisor_messages) > 1:
                 _export_md = "\n\n".join(
@@ -2493,6 +3109,156 @@ with tab_advisor:
                 st.session_state.advisor_messages = []
                 _save_advisor_history([])
                 st.rerun()
+
+        # ── Share panel: Summary vs Case Inspector ─────────────────────────────
+        # Load saved reports once (used by both modes)
+        _adv_reports: list = []
+        if REPORTS_PATH.exists():
+            try:
+                with open(REPORTS_PATH, "r", encoding="utf-8") as _f:
+                    _adv_reports = json.load(_f)
+            except Exception:
+                pass
+        _adv_report_labels = [f"{e['timestamp']} · {e['label']}" for e in _adv_reports]
+
+        _share_mode = st.radio(
+            "Share with advisor:",
+            ["📊 Summary", "🔍 Case Inspector"],
+            horizontal=True,
+            key="advisor_share_mode",
+            label_visibility="collapsed",
+        )
+
+        if _share_mode == "📊 Summary":
+            _adv_report_opts = ["📋 Select a report to share…"] + _adv_report_labels
+            _adv_report_sel = st.selectbox(
+                "Report:", _adv_report_opts, key="advisor_report_sel", label_visibility="collapsed"
+            )
+            if _adv_report_sel != "📋 Select a report to share…":
+                _sel_idx   = _adv_report_opts.index(_adv_report_sel) - 1
+                _sel_entry = _adv_reports[_sel_idx]
+                _sel_sum   = compute_summary_from_results(_sel_entry.get("report", {}).get("results", []))
+                if _sel_sum:
+                    _inject_text = (
+                        f"Here are my evaluation results from **{_sel_entry['label']}** ({_sel_entry['timestamp']}):\n"
+                        + "\n".join(f"  - {k}: {v:.3f}" for k, v in sorted(_sel_sum.items()))
+                    )
+                    _last_adv = st.session_state.advisor_messages[-1] if st.session_state.advisor_messages else {}
+                    if _last_adv.get("content") != _inject_text:
+                        st.session_state.advisor_messages.append({"role": "user", "content": _inject_text})
+                        _save_advisor_history(st.session_state.advisor_messages)
+                        st.rerun()
+
+        else:  # Case Inspector
+            if not _adv_reports:
+                st.caption("No saved reports found. Run an evaluation first.")
+            else:
+                _ci_report_opts = ["Select a report…"] + _adv_report_labels
+                _ci_report_sel = st.selectbox(
+                    "Report:", _ci_report_opts, key="ci_report_sel", label_visibility="collapsed"
+                )
+
+                if _ci_report_sel != "Select a report…":
+                    _ci_idx     = _ci_report_opts.index(_ci_report_sel) - 1
+                    _ci_entry   = _adv_reports[_ci_idx]
+                    _ci_results = _ci_entry.get("report", {}).get("results", [])
+                    _ci_total   = len(_ci_results)
+
+                    if _ci_total == 0:
+                        st.caption("This report has no item-level results.")
+                    else:
+                        # Build item options from actual questions — limited to report size
+                        def _ci_label(i, item):
+                            q = item.get("question") or item.get("item", {}).get("question", "")
+                            preview = str(q)[:80] + "…" if len(str(q)) > 80 else str(q)
+                            return f"Item {i+1}: {preview}" if preview else f"Item {i+1}"
+                        _ci_item_opts = [_ci_label(i, r) for i, r in enumerate(_ci_results)]
+                        _ci_item_sel = st.selectbox(
+                            "Item:", _ci_item_opts, key="ci_item_sel", label_visibility="collapsed"
+                        )
+                        _ci_item_idx = _ci_item_opts.index(_ci_item_sel)
+                        _ci_item     = _ci_results[_ci_item_idx]
+
+                        if st.button("Share case with advisor", key="ci_share_btn", use_container_width=True):
+                            # Build a rich injection: Q + A + contexts + all metric diagnostics
+                            _ci_q   = _ci_item.get("question") or _ci_item.get("item", {}).get("question", "")
+                            _ci_a   = _ci_item.get("answer")   or _ci_item.get("item", {}).get("answer", "")
+                            _ci_ctx = _ci_item.get("contexts") or _ci_item.get("item", {}).get("contexts", [])
+                            _ci_metrics = _ci_item.get("metrics", [])
+
+                            _lines = [
+                                f"**Case Inspector — Item {_ci_item_idx+1} of {_ci_total}**",
+                                f"*Report: {_ci_entry['label']} ({_ci_entry['timestamp']})*",
+                                "",
+                            ]
+                            if _ci_q:
+                                _lines += [f"**Question:** {_ci_q}", ""]
+                            if _ci_a:
+                                _lines += [f"**Answer:** {_ci_a}", ""]
+                            if _ci_ctx:
+                                _lines.append(f"**Contexts:** {len(_ci_ctx)} chunk(s)")
+                                for _ci, _c in enumerate(_ci_ctx):
+                                    _lines.append(f"  - Chunk {_ci+1}: {str(_c)[:300]}{'…' if len(str(_c)) > 300 else ''}")
+                                _lines.append("")
+
+                            if _ci_metrics:
+                                _lines.append("**Metric results:**")
+                                _SKIP_KEYS = {"name", "score"}
+                                for _m in _ci_metrics:
+                                    _mn = _m.get("name", "?")
+                                    _ms = _m.get("score")
+                                    _score_str = f"{_ms:.3f}" if isinstance(_ms, (int, float)) else str(_ms)
+                                    _lines.append(f"• **{_mn}**: {_score_str}")
+                                    for _dk, _dv in _m.items():
+                                        if _dk in _SKIP_KEYS or _dv is None:
+                                            continue
+                                        if isinstance(_dv, list):
+                                            if _dv:
+                                                _lines.append(f"  - {_dk}: {', '.join(str(x) for x in _dv[:6])}"
+                                                               + (" …" if len(_dv) > 6 else ""))
+                                        elif isinstance(_dv, dict):
+                                            _lines.append(f"  - {_dk}: {json.dumps(_dv)[:200]}")
+                                        else:
+                                            _lines.append(f"  - {_dk}: {str(_dv)[:300]}")
+
+                            _ci_inject = "\n".join(_lines)
+                            _last_adv = st.session_state.advisor_messages[-1] if st.session_state.advisor_messages else {}
+                            if _last_adv.get("content") != _ci_inject:
+                                st.session_state.advisor_messages.append({"role": "user", "content": _ci_inject})
+                                _save_advisor_history(st.session_state.advisor_messages)
+                                st.rerun()
+
+        # ── Active profile indicator ──────────────────────────────────────────
+        if _adv_profile:
+            _pf_name = _adv_profile.get("name", "Active Profile")
+            _pf_detail_parts = []
+            for _k in ("retriever", "chunk_size", "top_k", "generation_llm"):
+                _v = _adv_profile.get(_k)
+                if _v:
+                    _pf_detail_parts.append(str(_v))
+            _pf_detail = " · ".join(_pf_detail_parts[:4])
+            st.markdown(
+                f"<div style='display:inline-flex;align-items:center;gap:0.5rem;"
+                f"background:var(--chip-bg);border:1px solid var(--chip-border);"
+                f"border-radius:20px;padding:0.25rem 0.85rem;font-size:0.82rem;"
+                f"color:var(--muted);margin-bottom:0.6rem;'>"
+                f"<span style='color:#22c55e;font-size:0.7rem;'>●</span>"
+                f"<strong style='color:var(--text);'>{_pf_name}</strong>"
+                + (f"<span style='opacity:0.6;'>— {_pf_detail}</span>" if _pf_detail else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div style='display:inline-flex;align-items:center;gap:0.5rem;"
+                "background:var(--chip-bg);border:1px solid var(--chip-border);"
+                "border-radius:20px;padding:0.25rem 0.85rem;font-size:0.82rem;"
+                "color:var(--muted);margin-bottom:0.6rem;'>"
+                "<span style='color:#f59e0b;font-size:0.7rem;'>●</span>"
+                "No active profile — advice will be generic. Set one up in the <strong>My Profile</strong> tab."
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
         st.markdown("")
 
@@ -2578,6 +3344,7 @@ with tab_advisor:
         if len(st.session_state.advisor_messages) <= 1:
             st.markdown("**Try asking:**")
             _starters = [
+                "What can you help me with?",
                 "My faithfulness is low — could it be a chunking problem?",
                 "How do I choose between dense and sparse retrieval?",
                 "My context utilization score is low — what does that mean?",
@@ -2586,7 +3353,8 @@ with tab_advisor:
             _sc1, _sc2 = st.columns(2)
             for _i, _s in enumerate(_starters):
                 with (_sc1 if _i % 2 == 0 else _sc2):
-                    if st.button(_s, key=f"starter_{_i}", use_container_width=True):
+                    if st.button(_s, key=f"starter_{_i}", use_container_width=True,
+                                 type="primary" if _i == 0 else "secondary"):
                         st.session_state.advisor_messages.append({"role": "user", "content": _s})
                         _save_advisor_history(st.session_state.advisor_messages)
                         st.rerun()
