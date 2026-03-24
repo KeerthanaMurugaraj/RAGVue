@@ -359,17 +359,28 @@ Our demo paper has been accepted to **EACL 2026 (Demo Track)**.
 **Title:** *RAGVue: A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation*  
 **Status:** Accepted (EACL 2026 Demo Track)  
 **Preprint:** https://arxiv.org/abs/2601.04196  
+**ACL Anthology:** https://aclanthology.org/2026.eacl-demo.35/
 
 If you use RAGVue in your research, please cite:
 
 ```bibtex
-@inproceedings{murugaraj2026ragvue,
-  title={{RAGVUE}: A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation},
-  author={Murugaraj, Keerthana and Lamsiyah, Salima and Theobald, Martin},
-  booktitle={Proceedings of the EACL 2026 Demo Track},
-  year={2026},
-  url={https://openreview.net/forum?id=LBUPAJIX5J}
-}
+@inproceedings{murugaraj-etal-2026-ragvue,
+    title = "{RAGVUE}: A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation",
+    author = "Murugaraj, Keerthana  and
+      Lamsiyah, Salima  and
+      Theobald, Martin",
+    editor = "Croce, Danilo  and
+      Leidner, Jochen  and
+      Moosavi, Nafise Sadat",
+    booktitle = "Proceedings of the 19th Conference of the {E}uropean Chapter of the {A}ssociation for {C}omputational {L}inguistics (Volume 3: System Demonstrations)",
+    month = mar,
+    year = "2026",
+    address = "Rabat, Marocco",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2026.eacl-demo.35/",
+    pages = "512--526",
+    ISBN = "979-8-89176-382-1",
+  }
 
 
 
