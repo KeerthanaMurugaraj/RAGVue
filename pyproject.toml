@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ragvue"
-version = "0.2.0"
+version = "0.6.0"
 description = "A Diagnostic View for Explainable and Automated Evaluation of Retrieval-Augmented Generation"
 authors = [{name = "Keerthana Murugaraj"}]
 readme = "README.md"
