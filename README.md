@@ -42,6 +42,12 @@ Optional: 4 Lightweight Local Metrics ( no API calls)
 
 ## 🚀 Installation
 
+### Install with pip
+```bash
+pip install ragvue
+```
+check recent versions here: https://pypi.org/project/ragvue/#history
+
 ### Install from source
 
 ```bash
