@@ -1,5 +1,5 @@
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 
 # Pydantic is used for data validation and serialization.
@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 class EvalItem(BaseModel):
     question: str
-    answer: str
+    answer: Optional[str] = ""
     contexts: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 

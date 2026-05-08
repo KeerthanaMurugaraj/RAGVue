@@ -42,20 +42,28 @@ Optional: 4 Lightweight Local Metrics ( no API calls)
 
 ## 🚀 Installation
 
-### Install with pip
+### Install with pip (recommended)
 ```bash
-pip install ragvue
+pip install ragvue                      # core evaluation engine (OpenAI judge)
+pip install "ragvue[ui]"                # + Streamlit dashboard
+pip install "ragvue[anthropic]"         # + Anthropic/Claude judge support
+pip install "ragvue[local]"             # + local metrics (no API, scikit-learn)
+pip install "ragvue[api]"               # + FastAPI REST server
+pip install "ragvue[all]"               # everything
 ```
-check recent versions here: https://pypi.org/project/ragvue/#history
+Latest release: https://pypi.org/project/ragvue/#history
 
 ### Install from source
 
 ```bash
-git clone <-repo-url> ragvue
+git clone <repo-url> ragvue
 cd ragvue
-pip install -e .                  # core (OpenAI judge)
-pip install -e ".[anthropic]"     # + Anthropic/Claude judge support
-pip install -e ".[all]"           # everything (FastAPI + local metrics + Anthropic)
+pip install -e .                        # core (OpenAI judge)
+pip install -e ".[ui]"                  # + Streamlit dashboard
+pip install -e ".[anthropic]"           # + Anthropic/Claude judge support
+pip install -e ".[local]"               # + local metrics (scikit-learn)
+pip install -e ".[api]"                 # + FastAPI REST server
+pip install -e ".[all]"                 # everything
 ```
 ### Set up API keys
 
